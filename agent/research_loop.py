@@ -85,10 +85,14 @@ def clamp_params(family: str, params: dict) -> tuple[dict, list[str]]:
 
 # --------------------------------------------------------------------- Optuna tuning
 def _suggest(trial, family: str, n_rows: int) -> dict:
+    # Ranges shrink with the training size so that no trial is degenerate (e.g. a leaf
+    # minimum larger than a tenth of the training fold gives constant predictions).
+    leaf_max = int(max(10, min(300, n_rows // 40)))
+    leaves_max = int(max(16, min(255, n_rows // 20)))
     if family == "lgbm":
-        return {"num_leaves": trial.suggest_int("num_leaves", 15, 255, log=True),
+        return {"num_leaves": trial.suggest_int("num_leaves", 8, leaves_max, log=True),
                 "learning_rate": trial.suggest_float("learning_rate", 0.02, 0.1, log=True),
-                "min_child_samples": trial.suggest_int("min_child_samples", 5, 300, log=True),
+                "min_child_samples": trial.suggest_int("min_child_samples", 3, leaf_max, log=True),
                 "feature_fraction": trial.suggest_float("feature_fraction", 0.3, 1.0),
                 "bagging_fraction": trial.suggest_float("bagging_fraction", 0.5, 1.0),
                 "lambda_l2": trial.suggest_float("lambda_l2", 1e-3, 30.0, log=True),
@@ -96,8 +100,8 @@ def _suggest(trial, family: str, n_rows: int) -> dict:
                 "min_split_gain": trial.suggest_float("min_split_gain", 0.0, 1.0),
                 "extra_trees": trial.suggest_categorical("extra_trees", [False, True])}
     if family == "xgb":
-        return {"max_depth": trial.suggest_int("max_depth", 3, 12),
-                "min_child_weight": trial.suggest_float("min_child_weight", 0.5, 30.0, log=True),
+        return {"max_depth": trial.suggest_int("max_depth", 3, 12 if n_rows > 5000 else 8),
+                "min_child_weight": trial.suggest_float("min_child_weight", 0.5, min(30.0, max(2.0, n_rows / 100)), log=True),
                 "subsample": trial.suggest_float("subsample", 0.5, 1.0),
                 "colsample_bytree": trial.suggest_float("colsample_bytree", 0.3, 1.0),
                 "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 30.0, log=True),

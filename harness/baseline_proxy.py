@@ -55,6 +55,7 @@ def run_proxy(spec: TaskSpec, kind: str, out_path: Path, n_jobs: int = 8) -> Pat
     train = read_csv(Path(spec.train_path))
     test = read_csv(Path(spec.test_path))
     target = spec.target_cols[0]
+    train = train[train[target].notna()].reset_index(drop=True)
     drop = [c for c in [spec.id_col] + spec.target_cols if c and c in train.columns]
     X = train.drop(columns=drop).copy()
     Xt = test[X.columns].copy()

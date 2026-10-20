@@ -70,11 +70,15 @@ def blend(preds: list[np.ndarray], weights: np.ndarray) -> np.ndarray:
 
 
 def build(metric_name: str, task: str, y: np.ndarray, oofs: list[np.ndarray], k: int,
-          y_range: tuple | None = None) -> dict:
-    """Fit blend weights + decision on OOF; returns weights, decision and the score."""
+          y_range: tuple | None = None, groups: np.ndarray | None = None) -> dict:
+    """Fit blend weights + decision on OOF; returns weights, decision and the (cross-fitted,
+    when ``groups`` are given) score."""
     loss = proxy_loss(metric_name, task, y, k)
     weights, _ = greedy_blend(oofs, loss)
     oof = blend(oofs, weights)
-    decision = postprocess.fit(metric_name, task, y, oof, y_range=y_range)
-    score = postprocess.score(metric_name, y, oof, decision)
+    if groups is not None:
+        score, _, decision = postprocess.crossfit(metric_name, task, y, oof, groups, y_range=y_range)
+    else:
+        decision = postprocess.fit(metric_name, task, y, oof, y_range=y_range)
+        score = postprocess.score(metric_name, y, oof, decision)
     return {"weights": weights.tolist(), "decision": decision, "score": score, "oof": oof}

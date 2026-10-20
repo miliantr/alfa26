@@ -159,8 +159,9 @@ class Pipeline:
 
     # ------------------------------------------------------------ comparison rule
     def compare(self, new: Experiment, ref: Experiment) -> dict:
-        """Paired comparison on identical folds. Significant = better overall and either
-        better on most folds or by more than one standard error of the fold deltas."""
+        """Paired comparison on identical folds (all repeats). Significant = better overall,
+        better on at least 60% of fold pairs, and a mean fold gain above half a standard
+        error — conservative on purpose: many trials on noisy folds produce lucky winners."""
         s = self.m.sign()
         delta = s * (new.score - ref.score)
         fd = s * (np.asarray(new.fold_scores, float) - np.asarray(ref.fold_scores, float))
@@ -170,7 +171,10 @@ class Pipeline:
         se = float(fd.std(ddof=1) / np.sqrt(k)) if k > 1 else float("inf")
         scale = max(abs(ref.score), 1e-9)
         min_delta = 1e-4 * scale
-        significant = bool(delta > min_delta and (wins >= int(np.ceil(0.6 * k)) or fd.mean() > se))
+        if k < 2:
+            significant = bool(delta > min_delta)
+        else:
+            significant = bool(delta > min_delta and wins >= int(np.ceil(0.6 * k)) and fd.mean() > 0.5 * se)
         return {"delta": delta, "rel_delta": delta / scale, "fold_wins": wins, "folds": k,
                 "fold_se": se, "significant": significant}
 
@@ -193,6 +197,10 @@ class Pipeline:
         cands = self.candidates()
         if not cands:
             return False
+        key = tuple(e.id for e in cands)
+        if key == getattr(self, "_last_cands", None):
+            return False  # the newest experiment did not enter the candidate pool
+        self._last_cands = key
         try:
             loaded = [(e, *self.preds(e)) for e in cands]
         except Exception as e:
@@ -206,7 +214,7 @@ class Pipeline:
             try:
                 mk = self.eval_mask
                 ens = ensemble.build(self.metric, self.task, self._y_eval()[mk], [o[mk] for _, o, _ in loaded],
-                                     self.k, y_range=self.y_range)
+                                     self.k, y_range=self.y_range, groups=np.asarray(self.folds)[mk])
                 if self.m.better(ens["score"], best_single[0].score):
                     w = np.asarray(ens["weights"])
                     test = ensemble.blend([t for _, _, t in loaded], w)

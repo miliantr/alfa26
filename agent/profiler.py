@@ -259,9 +259,12 @@ def choose_validation(prof: DataProfile, task_type: str, n: int) -> dict:
     if prof.time_column:
         return {"scheme": "group_time", "column": prof.time_column, "kind": prof.time_kind, "n_splits": k,
                 "why": "test lies after train on this column; validate on unseen periods"}
+    # Small data: repeat the CV with other shuffles to cut selection noise.
+    repeats = 3 if n < 5000 else (2 if n < 20000 else 1)
     if task_type in metrics.CLASSIFICATION:
-        return {"scheme": "stratified", "n_splits": k, "why": "classification"}
-    return {"scheme": "kfold_binned", "n_splits": k, "why": "regression; stratified on target quantiles"}
+        return {"scheme": "stratified", "n_splits": k, "repeats": repeats, "why": "classification"}
+    return {"scheme": "kfold_binned", "n_splits": k, "repeats": repeats,
+            "why": "regression; stratified on target quantiles"}
 
 
 def make_folds(validation: dict, train: pd.DataFrame, y_enc: np.ndarray, task_type: str,

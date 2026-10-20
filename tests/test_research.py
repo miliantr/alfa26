@@ -19,7 +19,8 @@ def test_tuner_ask_tell_cycle():
     seen = []
     for i in range(6):
         params = t.ask("lgbm", 1000)
-        assert params and 15 <= params["num_leaves"] <= 255
+        # ranges shrink with data size: no degenerate (constant-prediction) trials
+        assert params and 8 <= params["num_leaves"] <= 50 and params["min_child_samples"] <= 25
         t.tell(params, float(i))
         seen.append(params["num_leaves"])
     assert len(set(seen)) > 1

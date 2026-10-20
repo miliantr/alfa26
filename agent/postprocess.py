@@ -197,3 +197,40 @@ def labels_from(decision: dict | None, raw: np.ndarray) -> np.ndarray:
 
 def score(metric_name: str, y: np.ndarray, raw: np.ndarray, decision: dict | None) -> float:
     return metrics.evaluate(metric_name, y, apply(decision, raw))
+
+
+def needs_crossfit(metric_name: str, task: str) -> bool:
+    """Decision rules that are fitted to the labels (weights, thresholds, cut-points,
+    temperature) must be cross-fitted to give an honest score; clipping and identity
+    rules need not."""
+    if task == metrics.REGRESSION:
+        return False
+    m = metrics.REGISTRY[metric_name]
+    return m.needs == "label" or metric_name in ("logloss", "brier")
+
+
+def crossfit(metric_name: str, task: str, y: np.ndarray, raw: np.ndarray, groups: np.ndarray,
+             y_range: tuple | None = None) -> tuple[float, list[float], dict]:
+    """Honest score of "fit decision on OOF, then apply": for every fold, the rule is fitted
+    on the other folds' OOF predictions and applied to this fold. Returns
+    ``(score, per_fold_scores, decision_fitted_on_all_rows)``."""
+    full = fit(metric_name, task, y, raw, y_range=y_range)
+    ids = [g for g in np.unique(groups) if g >= 0]
+    if not needs_crossfit(metric_name, task) or len(ids) < 2:
+        s = score(metric_name, y, raw, full)
+        per = [score(metric_name, y[groups == g], raw[groups == g], full) for g in ids]
+        return s, per, full
+    P = _proba(raw)
+    out = np.zeros_like(P)
+    for g in ids:
+        te = groups == g
+        d = fit(metric_name, task, y[~te], P[~te], y_range=y_range, fast=True)
+        out[te] = apply(d, P[te])
+    per = []
+    for g in ids:
+        te = groups == g
+        try:
+            per.append(metrics.evaluate(metric_name, y[te], out[te]))
+        except Exception:
+            per.append(float("nan"))
+    return metrics.evaluate(metric_name, y, out), per, full

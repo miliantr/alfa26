@@ -122,6 +122,7 @@ def run(task_md: Path) -> None:
     def phase(name, **kw):
         summary["phases"].append({"phase": name, "elapsed": round(deadline.elapsed(), 1), **kw})
         write_json(run_dir / "summary.json", summary)
+        _snapshot(spec, run_dir, name)
 
     # ---- phase 0: constant -------------------------------------------------------
     spec = parse_task(task_md)
@@ -214,6 +215,9 @@ def solve_target(spec, tpl, settings, deadline, run_dir, llm, view, L, summary, 
         write_json(run_dir / "task_spec.json", spec.to_dict())
         Xtr, Xte, fmeta = prepare_base(train, test, prof)
         folds = profiler.make_folds(prof.validation, train, y, spec.task_type, seed=settings.seed)
+        reps = 1 if prof.validation.get("scheme") == "group_time" else int(prof.validation.get("repeats", 1))
+        folds_rep = [folds] + [profiler.make_folds(prof.validation, train, y, spec.task_type,
+                                                   seed=settings.seed + 17 * r) for r in range(1, reps)]
         emask, minfo = profiler.eval_mask(train, test, folds, prof.cat_features)
         prof.validation["eval_mask"] = minfo
         if minfo:
@@ -224,7 +228,8 @@ def solve_target(spec, tpl, settings, deadline, run_dir, llm, view, L, summary, 
                 "high_card_cats": [c for c in prof.cat_features if prof.columns[c]["high_card"]],
                 **{k: v for k, v in fmeta.items()}}
         base_path = run_dir / "base.pkl"
-        pd.to_pickle({"Xtr": Xtr, "Xte": Xte, "y": y, "folds": folds, "meta": meta, "eval_mask": emask}, base_path)
+        pd.to_pickle({"Xtr": Xtr, "Xte": Xte, "y": y, "folds": folds, "meta": meta, "eval_mask": emask,
+                      "folds_rep": folds_rep if reps > 1 else None}, base_path)
         del train, test
         gc.collect()
         phase("prepared", n_features=Xtr.shape[1], folds=int(folds.max() + 1))
@@ -280,6 +285,19 @@ def solve_target(spec, tpl, settings, deadline, run_dir, llm, view, L, summary, 
         L.info("target %s done at %.0fs; submission OOF score = %s", spec.target_cols, deadline.elapsed(),
                pipe.sub_score if pipe else None)
     return pipe
+
+
+def _snapshot(spec, run_dir: Path, name: str) -> None:
+    """Keep a copy of the submission as it stood at the end of each phase (journal /
+    offline evaluation of fallback vs core vs full agent)."""
+    try:
+        src = Path(spec.output_paths[0])
+        if src.exists():
+            snap = Path(run_dir) / "snapshots"
+            snap.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, snap / f"{len(list(snap.glob('*.csv'))):02d}_{name}.csv")
+    except Exception:
+        pass
 
 
 def _write_constant_parts(subs: dict) -> None:

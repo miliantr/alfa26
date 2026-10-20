@@ -237,7 +237,18 @@ def t_datetime_text_mae(root: Path):
     return md, labels
 
 
+def t_multi_target(root: Path):
+    df = _energy(20000).dropna(subset=["energy_star_rating"]).reset_index(drop=True)
+    tr, te = _split(df, seed=13)
+    labels = te[["id", "site_eui", "energy_star_rating"]]
+    md = write_task(root, tr, te.drop(columns=["site_eui", "energy_star_rating"]), ["site_eui", "energy_star_rating"],
+                    "Метрика — **RMSE**, усреднённая по двум целевым переменным.", title="Два таргета",
+                    output_kind="value", description="Предскажите одновременно site_eui и energy_star_rating.")
+    return md, labels
+
+
 TASKS = {
+    "multi_target": t_multi_target,
     "energy_star_mae": t_energy_star_mae,
     "building_class_auc": t_building_class_auc,
     "attack_binary_logloss": t_attack_binary_logloss,
@@ -264,6 +275,18 @@ def _score(md: Path, labels: pd.DataFrame, labels_path: Path) -> dict:
     out = Path(spec.output_paths[0])
     if not out.exists():
         return {"valid": False, "errors": ["missing"], "spec": spec.summary()}
+    if len(spec.target_cols) > 1:
+        from agent.task_parser import sub_spec
+
+        sub = pd.read_csv(out, dtype={spec.id_col: str})
+        lab = pd.read_csv(labels_path, dtype={spec.id_col: str})
+        errs = [] if list(sub.columns) == spec.submission_cols and len(sub) == len(lab) else ["bad shape"]
+        errs += [f"{t}: non-finite" for t in spec.target_cols if not np.isfinite(pd.to_numeric(sub[t], errors="coerce")).all()]
+        res = {"valid": not errs, "errors": errs, "spec": spec.summary()}
+        if not errs:
+            m = lab.merge(sub, on=spec.id_col, suffixes=("_true", ""))
+            res["score"] = {t: round(float(np.sqrt(np.mean((m[t] - m[f"{t}_true"]) ** 2))), 4) for t in spec.target_cols}
+        return res
     errs = check_file(out, SubmissionTemplate.from_spec(spec))
     res = {"valid": not errs, "errors": errs, "spec": spec.summary()}
     if not errs:

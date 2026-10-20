@@ -87,3 +87,18 @@ each section.
   Tested importance weighting `p(test|x)/p(train|x)` for shift-aware CV: it does NOT
   recover the official test class mix (Generic 0.23→0.13 vs 0.23 true, Fuzzers 0.10→0.16
   vs 0.07; ESS 29%), so CV is not re-weighted. Plain stratified CV is kept.
+
+## Generalization suite findings (M9)
+
+- 14 synthetic unseen tasks (regression / binary / multiclass / multi-target; MAE, RMSLE,
+  R², ROC-AUC, LogLoss, F1, weighted/macro F1, accuracy, QWK; renamed columns, no `unit`,
+  no dictionary, injected missingness, missing targets, integer labels, wide 400-column,
+  tiny 178-row, datetime + text with time split): **14/14 valid, all within budget**.
+- Tiny datasets exposed optimistic model selection: OOF-fitted decision rules (class
+  weights, thresholds) and many tuning trials on 5 noisy folds. Fixes: decision rules are
+  now **cross-fitted** (each fold's rule fitted on the other folds) for scoring; **repeated
+  CV** (3x for n<5k, 2x for n<20k) with averaged OOF/test predictions; tuning ranges bounded
+  by training size; stricter acceptance (≥60% fold wins AND mean gain > 0.5 SE).
+- Residual risk: on very small data (a few hundred rows) the agent can still pick a tuned
+  GBDT over a linear model when CV prefers it; on the 133-row diabetes holdout linear
+  was better by 0.04 R² (within holdout noise, CV disagrees).

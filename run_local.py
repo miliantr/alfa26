@@ -235,6 +235,20 @@ def main() -> int:
         for k in subsets:
             norms = [v[k]["normalized"] for v in report["baselines"].values() if k in v]
             report[f"normalized_conservative_{k}"] = min(norms) if norms else None
+        # Score the per-phase snapshots: fallback (quick) vs core (zoo) vs full agent.
+        snaps = sorted((task_copy.parent / "agent_run").glob("*/snapshots/*.csv"))
+        report["phase_scores"] = {}
+        for sp in snaps:
+            entry = {}
+            for k, ids in subsets.items():
+                try:
+                    v = score_submission(sp, labels_path, spec, ids)["value"]
+                except Exception:  # noqa: BLE001
+                    continue
+                bvals = [b[k]["value"] for b in report["baselines"].values() if k in b]
+                entry[k] = {"value": v, "normalized_vs_best_baseline": min(
+                    (metrics.normalized_score(spec.metric, v, b) for b in bvals), default=None)}
+            report["phase_scores"][sp.stem] = entry
 
     agent_runs = sorted((task_copy.parent / "agent_run").glob("*"))
     if agent_runs:
@@ -245,7 +259,7 @@ def main() -> int:
     write_json(run_root / "report.json", report)
     keys = ("exit_code", "wall_s", "peak_rss_gb", "killed", "submission_exists", "submission_errors",
             "score", "baselines", "test_like_subset", "normalized_conservative_all",
-            "normalized_conservative_test_like")
+            "normalized_conservative_test_like", "phase_scores")
     print(json.dumps({k: report.get(k) for k in keys}, indent=2, ensure_ascii=False, default=str))
     print("report:", run_root / "report.json")
     return 0 if report["submission_exists"] and not report["submission_errors"] else 1

@@ -117,47 +117,56 @@ def run(job: dict) -> dict:
     n_jobs = int(job.get("n_jobs", 8))
     seed = int(job.get("seed", 42))
     time_limit = float(job.get("time_limit", 1e9))
-    fold_ids = sorted(int(f) for f in np.unique(folds) if f >= 0)
+    # Repeated CV (small data): one OOF per repeat, averaged; test preds over all models.
+    fold_sets = [np.asarray(fr) for fr in (base.get("folds_rep") or [folds])]
     n_out = k if task != "regression" else 0
-    oof = np.full((len(Xtr), n_out) if n_out else len(Xtr), np.nan, dtype=np.float64)
+    shape_tr = (len(Xtr), n_out) if n_out else (len(Xtr),)
     test_pred = np.zeros((len(Xte), n_out) if n_out else len(Xte), dtype=np.float64)
-    fold_info, imp_total = [], {}
+    fold_info, imp_total, oofs = [], {}, []
     y_fit = _transform_target(y.astype(float), tt, shift) if task == "regression" else y.astype(int)
-    for i, f in enumerate(fold_ids):
-        elapsed = time.time() - t_start
-        left = time_limit - elapsed
-        per_fold = left / max(1, len(fold_ids) - i)
+    jobs = [(r, f) for r, fr in enumerate(fold_sets) for f in sorted(int(v) for v in np.unique(fr) if v >= 0)]
+    for i, (r, f) in enumerate(jobs):
+        fr = fold_sets[r]
+        if f == min(int(v) for v in np.unique(fr) if v >= 0):
+            oofs.append(np.full(shape_tr, np.nan, dtype=np.float64))
+        left = time_limit - (time.time() - t_start)
+        per_fold = left / max(1, len(jobs) - i)
         if i > 0 and fold_info and fold_info[-1]["seconds"] > left * 1.05:
             raise TimeoutError(f"not enough time for fold {i}: {left:.0f}s left")
-        tr = np.where(folds != f)[0]
-        va = np.where(folds == f)[0]
+        tr = np.where(fr != f)[0]
+        va = np.where(fr == f)[0]
         A, B, C = Xtr.iloc[tr], Xtr.iloc[va], Xte
         if te_cols:
             A, (B, C) = _target_encode(A, y_fit[tr], [B, C], te_cols, task, k, seed)
         t0 = time.time()
         pva, pte, info = models.fit_predict(family, params, task, A, y_fit[tr], B, y_fit[va], C,
-                                            n_classes=k, n_jobs=n_jobs, seed=seed + f,
+                                            n_classes=k, n_jobs=n_jobs, seed=seed + 100 * r + f,
                                             time_limit=max(5.0, per_fold * 0.95),
                                             objective=model.get("objective", "l2"),
                                             class_weight=model.get("class_weight"))
         if task == "regression":
             pva, pte = _inverse_target(pva, tt, shift), _inverse_target(pte, tt, shift)
-        oof[va] = pva
-        test_pred += pte / len(fold_ids)
+        oofs[-1][va] = pva
+        test_pred += pte / len(jobs)
         for name, v in (info.get("importance") or {}).items():
             imp_total[name] = imp_total.get(name, 0.0) + float(v)
-        fold_info.append({"fold": f, "seconds": round(time.time() - t0, 2),
+        fold_info.append({"repeat": r, "fold": f, "seconds": round(time.time() - t0, 2),
                           "best_iteration": info.get("best_iteration")})
+    oof = np.mean(np.stack(oofs), axis=0)
     if task == "regression" and not np.all(np.isfinite(oof)):
         raise ValueError("non-finite OOF predictions")
-    # Score with a decision rule fitted on OOF (same rule for every fold), on the rows
-    # whose validation conditions mimic the test (eval mask, see profiler.eval_mask).
+    # Honest scoring on rows whose validation conditions mimic the test (eval mask):
+    # label-fitted decision rules are cross-fitted across folds; the rule used for the
+    # test is fitted on all OOF rows.
     mask = base.get("eval_mask")
     mask = np.ones(len(y), dtype=bool) if mask is None else np.asarray(mask, bool)
     y_eval = y.astype(float) if task == "regression" else y.astype(int)
     y_range = tuple(meta.get("y_range")) if meta.get("y_range") else None
-    decision = postprocess.fit(metric, task, y_eval[mask], oof[mask], y_range=y_range)
-    score = postprocess.score(metric, y_eval[mask], oof[mask], decision)
+    score, _, decision = postprocess.crossfit(metric, task, y_eval[mask], oof[mask], fold_sets[0][mask],
+                                              y_range=y_range)
+    fold_scores = []
+    for o, fr in zip(oofs, fold_sets):
+        fold_scores += postprocess.crossfit(metric, task, y_eval[mask], o[mask], fr[mask], y_range=y_range)[1]
     if task == "regression":
         raw_decision = None
     elif metrics.REGISTRY[metric].needs == "label":
@@ -165,13 +174,6 @@ def run(job: dict) -> dict:
     else:
         raw_decision = {"kind": "proba"}
     raw_score = postprocess.score(metric, y_eval[mask], oof[mask], raw_decision)
-    fold_scores = []
-    for f in fold_ids:
-        idx = np.where((folds == f) & mask)[0]
-        try:
-            fold_scores.append(postprocess.score(metric, y_eval[idx], oof[idx], decision))
-        except Exception:
-            fold_scores.append(float("nan"))
     np.save(out_dir / "oof.npy", oof.astype(np.float32))
     np.save(out_dir / "test.npy", test_pred.astype(np.float32))
     imp_sorted = sorted(imp_total.items(), key=lambda kv: -kv[1])
