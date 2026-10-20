@@ -102,3 +102,15 @@ each section.
 - Residual risk: on very small data (a few hundred rows) the agent can still pick a tuned
   GBDT over a linear model when CV prefers it; on the 133-row diabetes holdout linear
   was better by 0.04 R² (within holdout noise, CV disagrees).
+- **Label-shift adaptation rejected (task 2).** EM prior re-estimation (Saerens 2002) on
+  test predictions moves priors only halfway to the official hold-out mix (TV 0.131 ->
+  0.084) and pushes the rare classes the wrong way (Analysis/Backdoor/Shellcode/Worms/
+  Fuzzers up, while they are rarer in the test). Adapting macro-F1 decisions to those
+  priors would hurt rare-class precision, so decisions stay fitted on train OOF.
+
+## Checklist run (2026-10-20, commit 818677e)
+
+imports ⊆ requirements ✅ · no network libs outside llm_client ✅ · ZIP root has
+solution.py (23 files) ✅ · valid submission with the LLM unreachable ✅ (146 s) · valid
+submission after hard kills at 459 s and 636 s ✅ · offline Docker run on the real task-2
+data (network none, 8 CPUs) ✅ (peak RSS 0.81 GB).
