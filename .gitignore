@@ -1,0 +1,68 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+credentials*.json
+
+# --- Datasets ---
+data/
+*.csv
+*.parquet
+*.feather
+!tests/fixtures/**/*.csv
+
+# --- Run artifacts ---
+runs/
+run_*/
+outputs/
+output/
+logs/
+*.log
+journal*.json
+mlruns/
+catboost_info/
+lightning_logs/
+
+# --- Model files ---
+*.pkl
+*.pickle
+*.joblib
+*.cbm
+*.lgb
+*.ubj
+*.onnx
+*.pt
+*.pth
+*.npy
+*.npz
+models/
+
+# --- Built submissions ---
+dist/
+build/
+*.zip
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# --- Case materials (organizer PDF) ---
+*.pdf
