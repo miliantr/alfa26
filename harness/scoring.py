@@ -10,9 +10,11 @@ from agent import metrics
 from agent.task_parser import TaskSpec
 
 
-def score_submission(sub_path: Path, labels_path: Path, spec: TaskSpec) -> dict:
+def score_submission(sub_path: Path, labels_path: Path, spec: TaskSpec, ids: set | None = None) -> dict:
     sub = pd.read_csv(sub_path, dtype={spec.id_col: str})
     lab = pd.read_csv(labels_path, dtype={spec.id_col: str})
+    if ids is not None:
+        lab = lab[lab[spec.id_col].isin(ids)]
     target = spec.target_cols[0]
     merged = lab.merge(sub, on=spec.id_col, how="left", suffixes=("_true", ""))
     out: dict = {"metric": spec.metric, "n": len(merged)}

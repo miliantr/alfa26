@@ -209,24 +209,32 @@ def main() -> int:
 
     if args.holdout and out_path.exists() and not report["submission_errors"]:
         from harness.baseline_proxy import run_proxy
+        from harness.holdout import test_like_ids
         from harness.scoring import score_submission
 
-        import pandas as pd
-
-        report["score"] = score_submission(out_path, labels_path, spec)
-        labels = pd.read_csv(labels_path, dtype={spec.id_col: str})
+        like_ids, like_info = test_like_ids(task_md, task_copy)
+        n_hold = report["holdout"]["holdout_rows"]
+        subsets = {"all": None}
+        if like_info and len(like_ids) < n_hold:
+            subsets["test_like"] = like_ids
+            report["test_like_subset"] = {"rows": len(like_ids), "excluded_unseen": like_info}
+        report["score"] = {k: score_submission(out_path, labels_path, spec, ids) for k, ids in subsets.items()}
         report["baselines"] = {}
         for kind in [k for k in args.baselines.split(",") if k]:
             t0 = time.time()
             try:
-                b = run_proxy(spec, labels, kind)
-                report["baselines"][kind] = {
-                    "value": b, "seconds": round(time.time() - t0, 1),
-                    "normalized": metrics.normalized_score(spec.metric, report["score"]["value"], b)}
+                bp = run_proxy(spec, kind, run_root / f"baseline_{kind}.csv")
+                entry = {"seconds": round(time.time() - t0, 1)}
+                for k, ids in subsets.items():
+                    b = score_submission(bp, labels_path, spec, ids)["value"]
+                    entry[k] = {"value": b, "normalized": metrics.normalized_score(
+                        spec.metric, report["score"][k]["value"], b)}
+                report["baselines"][kind] = entry
             except Exception as e:  # noqa: BLE001
                 report["baselines"][kind] = {"error": repr(e)}
-        norms = [v["normalized"] for v in report["baselines"].values() if "normalized" in v]
-        report["normalized_conservative"] = min(norms) if norms else None
+        for k in subsets:
+            norms = [v[k]["normalized"] for v in report["baselines"].values() if k in v]
+            report[f"normalized_conservative_{k}"] = min(norms) if norms else None
 
     agent_runs = sorted((task_copy.parent / "agent_run").glob("*"))
     if agent_runs:
@@ -236,7 +244,8 @@ def main() -> int:
             report["agent_summary"] = json.loads(summ.read_text(encoding="utf-8"))
     write_json(run_root / "report.json", report)
     keys = ("exit_code", "wall_s", "peak_rss_gb", "killed", "submission_exists", "submission_errors",
-            "score", "baselines", "normalized_conservative")
+            "score", "baselines", "test_like_subset", "normalized_conservative_all",
+            "normalized_conservative_test_like")
     print(json.dumps({k: report.get(k) for k in keys}, indent=2, ensure_ascii=False, default=str))
     print("report:", run_root / "report.json")
     return 0 if report["submission_exists"] and not report["submission_errors"] else 1

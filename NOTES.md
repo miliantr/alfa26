@@ -39,3 +39,28 @@ each section.
   always score in original space.
 - Task 2: 38% duplicated feature rows in train, some with conflicting labels; unseen
   `state` values in test; test class priors differ from train (official UNSW-NB15 split).
+
+## Pipeline decisions (M4/M5)
+
+- **Category vocabulary uses train ∪ test values** (no labels involved) so that category
+  codes are identical across train/test and unseen test values get their own code instead
+  of colliding. All fitted statistics (frequency/group/target encodings) use train only.
+- **Experiments run in subprocess workers** with a hard timeout and an RSS guard; the
+  main process never trains models, so a hung or exploding fit cannot kill the run or
+  block the submission writes.
+- **Final test predictions = average of the K fold models** (validated); no unvalidated
+  full refit.
+- **Decision rules (class weights, thresholds, clipping) are fitted on OOF** and scored
+  with the same rule on every fold.
+- **Eval mask (validation mimics test).** Found on task 1: `State_11` exists only in
+  `Year_Factor`=5. With leave-one-year-out CV its fold scores measure extrapolation to a
+  state never seen, while the real test (year 6) has no unseen states. Rule: for
+  low-cardinality categoricals, if the real test has ≤0.5% unseen values but a CV fold
+  has unseen values, those fold rows still get OOF predictions but are not scored.
+- **Local holdout for task 1 is harsher than the platform**: holding out year 5 makes
+  `State_11` (3 191 rows) unseen, where tree models extrapolate badly (RMSE 135 there).
+  The harness therefore also reports a `test_like` score on holdout rows whose
+  categories were seen in the holdout's train part (only for columns on which the real
+  test has no unseen values). That is the estimate used for platform-like conditions.
+- **Group-time folds**: ≤6 periods → leave-one-period-out; more → k folds of whole
+  periods.

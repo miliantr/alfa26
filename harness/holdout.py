@@ -98,3 +98,35 @@ def make_holdout(task_md: Path, labels_out: Path, split: str = "auto", frac: flo
     labels.to_csv(labels_out, index=False)
     info.update(train_rows=len(new_train), holdout_rows=len(hold))
     return info
+
+
+def test_like_ids(original_md: Path, copy_md: Path, max_card: int = 200) -> tuple[set, dict]:
+    """Holdout ids whose categorical values were seen in the holdout's train part, for
+    every low-cardinality column on which the *real* test has no unseen values.
+
+    Mirrors the agent's eval mask: it estimates the score under the real test's
+    conditions when the holdout itself introduces brand-new categories.
+    """
+    real = parse_task(original_md)
+    cp = parse_task(copy_md)
+    rtr = read_csv(Path(real.train_path), dtype=str, keep_default_na=False)
+    rte = read_csv(Path(real.test_path), dtype=str, keep_default_na=False)
+    tr = read_csv(Path(cp.train_path), dtype=str, keep_default_na=False)
+    ho = read_csv(Path(cp.test_path), dtype=str, keep_default_na=False)
+    keep = np.ones(len(ho), dtype=bool)
+    info = {}
+    for c in ho.columns:
+        if c == cp.id_col or c not in tr.columns:
+            continue
+        nonempty = rtr[c][rtr[c] != ""]
+        if len(nonempty) and pd.to_numeric(nonempty, errors="coerce").notna().mean() > 0.95:
+            continue  # numeric column (empty cells are missing values)
+        if rtr[c].nunique() > max_card:
+            continue
+        if (~rte[c].isin(set(rtr[c]))).mean() > 0.005:
+            continue  # real test extrapolates on this column too
+        unseen = ~ho[c].isin(set(tr[c])).to_numpy()
+        if unseen.any():
+            keep &= ~unseen
+            info[c] = int(unseen.sum())
+    return set(ho.loc[keep, cp.id_col]), info

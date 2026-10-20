@@ -48,7 +48,10 @@ def _pipeline(kind: str, is_reg: bool, num: list[str], cat: list[str], n_jobs: i
     return make_pipeline(pre, est)
 
 
-def run_proxy(spec: TaskSpec, labels: pd.DataFrame, kind: str, n_jobs: int = 8) -> float:
+def run_proxy(spec: TaskSpec, kind: str, out_path: Path, n_jobs: int = 8) -> Path:
+    """Fit the proxy on the task's train.csv and write a submission-style file."""
+    from agent.submission import SubmissionTemplate
+
     train = read_csv(Path(spec.train_path))
     test = read_csv(Path(spec.test_path))
     target = spec.target_cols[0]
@@ -60,18 +63,20 @@ def run_proxy(spec: TaskSpec, labels: pd.DataFrame, kind: str, n_jobs: int = 8) 
         X[c], Xt[c] = X[c].astype(str), Xt[c].astype(str)
     is_reg = spec.task_type == metrics.REGRESSION
     pipe = _pipeline(kind, is_reg, num, cat, n_jobs)
-    test_ids = read_csv(Path(spec.test_path), usecols=[spec.id_col], dtype=str)[spec.id_col]
-    y_true_raw = labels.astype({spec.id_col: str}).set_index(spec.id_col).loc[test_ids.values, target]
+    tpl = SubmissionTemplate.from_spec(spec)
     if is_reg:
-        y = pd.to_numeric(train[target])
-        pipe.fit(X, y)
-        pred = pipe.predict(Xt)
-        return metrics.evaluate(spec.metric, pd.to_numeric(y_true_raw).to_numpy(), pred)
-    classes = spec.classes
-    enc = {c: i for i, c in enumerate(classes)}
-    y = train[target].astype(str).map(enc).to_numpy()
-    pipe.fit(X, y)
-    proba = np.zeros((len(Xt), len(classes)))
-    proba[:, pipe.classes_] = pipe.predict_proba(Xt)
-    yt = y_true_raw.astype(str).map(enc).fillna(-1).astype(int).to_numpy()
-    return metrics.evaluate(spec.metric, yt, proba)
+        pipe.fit(X, pd.to_numeric(train[target]))
+        df = tpl.from_predictions(pipe.predict(Xt))
+    else:
+        enc = {c: i for i, c in enumerate(spec.classes)}
+        pipe.fit(X, train[target].astype(str).map(enc).to_numpy())
+        proba = np.zeros((len(Xt), len(spec.classes)))
+        proba[:, pipe.classes_] = pipe.predict_proba(Xt)
+        if spec.output_kind == "label":
+            df = tpl.from_predictions([spec.classes[i] for i in proba.argmax(1)])
+        elif spec.output_kind == "proba":
+            df = tpl.from_predictions(proba[:, spec.classes.index(spec.positive_label)])
+        else:
+            df = tpl.from_predictions(proba)
+    df.to_csv(out_path, index=False)
+    return out_path
