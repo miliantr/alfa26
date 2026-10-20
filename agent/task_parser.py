@@ -357,6 +357,40 @@ def parse_task(task_md: Path) -> TaskSpec:
     return spec
 
 
+def sub_spec(spec: TaskSpec, target: str, out_path: Path) -> TaskSpec:
+    """Single-target view of a multi-target task (own type, classes, output kind)."""
+    import copy
+
+    s = copy.deepcopy(spec)
+    s.target_cols = [target]
+    s.task_type = spec.target_types.get(target, spec.task_type)
+    s.submission_cols = [c for c in ([spec.id_col] if spec.id_col else []) + [target]]
+    s.output_paths = [str(out_path)]
+    s.classes, s.positive_label, s.label_dtype = [], None, "str"
+    y = read_csv(Path(spec.train_path), usecols=[target], dtype=str)[target]
+    metric_name, _ = fix_metric_for_task(spec.metric, s.task_type)
+    s.metric = metric_name
+    if s.task_type in metrics.CLASSIFICATION:
+        counts = y.dropna().value_counts()
+        s.label_dtype = _label_dtype(y)
+        cls = list(counts.index.astype(str))
+        cls.sort(key=(lambda c: float(c)) if s.label_dtype in ("int", "float") else None)
+        s.classes = cls
+        if s.task_type == metrics.BINARY:
+            s.positive_label = _positive_label(cls, counts, spec.text)
+    sample = None
+    if spec.sample_path:
+        try:
+            sample = read_csv(Path(spec.sample_path), dtype=str, keep_default_na=False, nrows=20000)
+            sample = sample[[c for c in s.submission_cols if c in sample.columns]]
+        except Exception:
+            sample = None
+    s.output_kind, s.proba_columns = _output_kind(s.task_type, s.metric, sample, s.id_col, [target], s.classes, spec.text)
+    if s.output_kind == "proba_wide":  # wide probabilities are not defined per target
+        s.output_kind = "proba" if s.task_type == metrics.BINARY else "label"
+    return s
+
+
 # --------------------------------------------------------------------- LLM cross-check
 LLM_SCHEMA = {
     "type": "object",
@@ -375,6 +409,35 @@ LLM_SCHEMA = {
     },
     "required": ["task_type", "target_columns", "metric"],
 }
+
+
+PARSE_SYSTEM = (
+    "You read machine-learning task descriptions (often in Russian) and extract a structured spec. "
+    "Reply with JSON only, matching: {\"task_type\": regression|binary|multiclass|multilabel|other, "
+    "\"target_columns\": [..], \"id_column\": str|null, \"metric\": str (the PRIMARY scoring metric, e.g. "
+    "rmse, mae, rmsle, mape, r2, f1_macro, f1_weighted, f1, accuracy, roc_auc, pr_auc, logloss, qwk), "
+    "\"secondary_metrics\": [..], \"output_format\": value|label|proba|proba_wide, \"positive_label\": str|null, "
+    "\"time_column\": str|null (only if the test lies after train in time), \"group_column\": str|null, "
+    "\"special_requirements\": [..], \"domain_notes\": str (<=60 words of domain knowledge useful for features)}"
+)
+
+
+def llm_parse_prompt(spec: TaskSpec, max_chars: int = 6000) -> str:
+    cols = []
+    try:
+        cols = read_header(Path(spec.train_path)) if spec.train_path else []
+    except Exception:
+        pass
+    sample_head = ""
+    if spec.sample_path:
+        try:
+            sample_head = Path(spec.sample_path).read_text(encoding="utf-8", errors="replace").splitlines()[:3]
+        except Exception:
+            pass
+    roles = {str(r.get("feature")): r.get("role") for r in spec.dictionary if r.get("role") not in (None, "feature")}
+    return (f"TASK DESCRIPTION:\n{spec.text[:max_chars]}\n\nTRAIN COLUMNS ({len(cols)}): {cols[:80]}\n"
+            f"DICTIONARY ROLES (non-feature): {roles}\nSAMPLE SUBMISSION HEAD: {sample_head}\n"
+            f"target candidates: {spec.target_cols}\nReturn the JSON spec.")
 
 
 def merge_llm_view(spec: TaskSpec, view: dict) -> TaskSpec:

@@ -66,6 +66,9 @@ def _target_encode(Xtr, ytr, others, cols, task, k, seed, n_inner=5, smooth=20.0
             enc = np.where(np.isnan(enc), prior[None, :], enc)
             for j, nm in enumerate(names):
                 o[nm] = enc[:, j].astype("float32")
+        if Xtr[c].nunique() > 200:  # the encoding replaces a very high-cardinality raw key
+            Xtr = Xtr.drop(columns=[c])
+            others = [o.drop(columns=[c]) for o in others]
     return Xtr, others
 
 
@@ -106,9 +109,10 @@ def run(job: dict) -> dict:
     tt = model.get("target_transform", "none") if task == "regression" else "none"
     # Shift so the transformed target is defined: y - shift >= 0.
     shift = min(0.0, float(np.min(y))) if tt in ("log1p", "sqrt") else 0.0
-    te_cols = [mapping.get(c, c) for c in model.get("te_cols", []) if mapping.get(c, c) in Xtr.columns]
-    if model.get("te_cols") == "auto":
-        te_cols = [mapping[c] for c in meta.get("high_card_cats", []) if c in mapping]
+    te_req = model.get("te_cols") or []
+    if te_req == "auto":
+        te_req = list(meta.get("high_card_cats", []))
+    te_cols = [mapping[c] for c in te_req if c in mapping]
 
     n_jobs = int(job.get("n_jobs", 8))
     seed = int(job.get("seed", 42))

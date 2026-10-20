@@ -251,6 +251,29 @@ def r_text_tfidf_svd(Xtr, Xte, ctx, n_components=16, **_):
     return pd.DataFrame(a), pd.DataFrame(b)
 
 
+def r_make_key(Xtr, Xte, ctx, cols=None, name=None, **_):
+    """Composite identity key (e.g. a building = state + type + area + year built) as a
+    categorical; pair it with target encoding to pass an entity's history to the model."""
+    cols = [c for c in (cols or []) if c in Xtr.columns]
+    if len(cols) < 1:
+        return pd.DataFrame(), pd.DataFrame()
+    name = name or "key__" + "__".join(_safe_name(c) for c in cols)[:60]
+
+    def key(df):
+        parts = [df[c].astype(str) for c in cols]
+        out = parts[0]
+        for p in parts[1:]:
+            out = out + "|" + p
+        return out
+    ka, kb = key(Xtr), key(Xte)
+    vocab = pd.Index(sorted(set(ka.unique()) | set(kb.unique())))
+    a = pd.DataFrame({name: pd.Categorical(ka, categories=vocab)})
+    b = pd.DataFrame({name: pd.Categorical(kb, categories=vocab)})
+    a[f"{name}__count"] = ka.map(ka.value_counts()).astype("float32").to_numpy()
+    b[f"{name}__count"] = kb.map(ka.value_counts()).fillna(0).astype("float32").to_numpy()
+    return a, b
+
+
 def r_cached_columns(Xtr, Xte, ctx, path=None, **_):
     """Columns produced earlier (e.g. by sandboxed LLM code) and stored on disk."""
     d = pd.read_pickle(path)
@@ -266,6 +289,7 @@ RECIPES = {
     "missing_count": r_missing_count,
     "log1p": r_log1p,
     "text_tfidf_svd": r_text_tfidf_svd,
+    "make_key": r_make_key,
     "cached_columns": r_cached_columns,
 }
 
@@ -278,6 +302,7 @@ RECIPE_DOCS = {
     "missing_count": "row missing-value count and is-NA indicators",
     "log1p": "log1p of skewed non-negative numeric features",
     "text_tfidf_svd": "TF-IDF + SVD components of text columns",
+    "make_key": "composite identity key from columns (args: cols=[...]); set te=true to target-encode it",
     "drop": "remove features (args: cols=[...])",
 }
 

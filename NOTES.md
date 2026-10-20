@@ -64,3 +64,26 @@ each section.
   test has no unseen values). That is the estimate used for platform-like conditions.
 - **Group-time folds**: ≤6 periods → leave-one-period-out; more → k folds of whole
   periods.
+
+## LLM / research decisions (M6/M7)
+
+- **No real-LLM credentials yet.** Everything LLM-related was developed and tested with the
+  deterministic mock (`AGENT_LLM_MODE=mock`, behaviours good/garbage/error/slow/mixed).
+  The real endpoint path (OpenAI SDK, `extra_body` for Qwen non-thinking mode with
+  automatic fallback on HTTP 400, `/no_think` suffix, `<think>` stripping) still needs one
+  live smoke test with the team key.
+- **LLM budget per task run**: 30 calls / 160k tokens by default; ~1 call for task
+  understanding + 1 call per 3 hypotheses. After 3 consecutive failures the client turns
+  itself off and the deterministic planner continues.
+- **Heuristics beat the LLM on task facts** (type, target, metric). The LLM only fills gaps
+  (e.g. no metric found in the text) and contributes domain notes / time-column hints.
+- **Champion = proxy model for feature hypotheses**: LightGBM unless another family is
+  significantly (>2%) better at <4x the cost (task 1 picks XGBoost).
+- **Acceptance rule**: better overall AND (better on ≥60% of folds OR mean fold gain > 1 SE).
+- **Propagation** of accepted features to other families only for families that carry
+  blend weight and only if the run costs <25% of the research time left (a 4-minute
+  CatBoost re-run late in a short run was not worth it).
+- **Train/test covariate shift on task 2** (adversarial AUC 0.89, ct_* counters drift).
+  Tested importance weighting `p(test|x)/p(train|x)` for shift-aware CV: it does NOT
+  recover the official test class mix (Generic 0.23→0.13 vs 0.23 true, Fuzzers 0.10→0.16
+  vs 0.07; ESS 29%), so CV is not re-weighted. Plain stratified CV is kept.

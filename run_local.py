@@ -184,7 +184,7 @@ def main() -> int:
 
     task_md = Path(args.task).resolve()
     name = task_md.parent.name + ("_holdout" if args.holdout else "")
-    run_root = Path(args.out) if args.out else REPO / "runs" / f"{time.strftime('%Y%m%d_%H%M%S')}_{name}"
+    run_root = Path(args.out).resolve() if args.out else REPO / "runs" / f"{time.strftime('%Y%m%d_%H%M%S')}_{name}"
     run_root.mkdir(parents=True, exist_ok=True)
     task_copy = _copy_task(task_md, run_root / "task")
     report: dict = {"task": str(task_md), "args": vars(args)}

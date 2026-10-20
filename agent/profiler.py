@@ -211,14 +211,15 @@ def profile(train: pd.DataFrame, test: pd.DataFrame, target_cols: list[str], id_
 
 def _target_summary(train, target_cols, task_type, y) -> dict:
     t = target_cols[0]
+    col = train[t] if t in train.columns else pd.Series(y)
     if task_type == metrics.REGRESSION:
-        v = pd.to_numeric(train[t], errors="coerce").dropna()
+        v = pd.to_numeric(pd.Series(y) if y is not None else col, errors="coerce").dropna()
         q = v.quantile([0.0, 0.01, 0.5, 0.99, 1.0]).round(4).tolist()
         return {"mean": round(float(v.mean()), 4), "std": round(float(v.std()), 4),
                 "skew": round(float(v.skew()), 3), "min": q[0], "p01": q[1], "median": q[2],
                 "p99": q[3], "max": q[4], "nonnegative": bool((v >= 0).all()),
                 "integer": bool(np.allclose(v % 1, 0)), "n_unique": int(v.nunique())}
-    vc = train[t].astype(str).value_counts()
+    vc = col.astype(str).value_counts()
     return {"n_classes": int(len(vc)), "counts": {k: int(v) for k, v in vc.items()},
             "imbalance_ratio": round(float(vc.max() / max(vc.min(), 1)), 2)}
 
