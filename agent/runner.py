@@ -89,11 +89,12 @@ def zoo_plan(task: str, metric_name: str, prof, n_rows: int) -> list[tuple[str, 
         skew = abs(prof.target.get("skew", 0) or 0)
         if tt == "none" and prof.target.get("nonnegative") and skew > 1.0 and obj == "l2":
             plan.append(("lgbm_log1p", {"family": "lgbm", "objective": "l2", "target_transform": "log1p"}))
-        plan.append(("catboost", {"family": "catboost", "objective": obj, "target_transform": tt}))
         plan.append(("xgb", {"family": "xgb", "objective": obj, "target_transform": tt}))
         plan.append(("linear", {"family": "linear", "objective": obj, "target_transform": tt}))
         if n_rows <= 300_000:
             plan.append(("extratrees", {"family": "extratrees", "target_transform": tt}))
+        # CatBoost last: the slowest family, so a tight budget is spent on cheaper ones first.
+        plan.append(("catboost", {"family": "catboost", "objective": obj, "target_transform": tt}))
         return plan
     imbalance = prof.target.get("imbalance_ratio", 1.0) or 1.0
     balanced_metric = metric_name in ("f1_macro", "balanced_accuracy", "recall_macro", "precision_macro",
@@ -101,11 +102,11 @@ def zoo_plan(task: str, metric_name: str, prof, n_rows: int) -> list[tuple[str, 
     plan.append(("lgbm", {"family": "lgbm"}))
     if balanced_metric and imbalance > 3:
         plan.append(("lgbm_cw_sqrt", {"family": "lgbm", "class_weight": "sqrt"}))
-    plan.append(("catboost", {"family": "catboost"}))
     plan.append(("xgb", {"family": "xgb"}))
     plan.append(("linear", {"family": "linear"}))
     if n_rows <= 300_000:
         plan.append(("extratrees", {"family": "extratrees"}))
+    plan.append(("catboost", {"family": "catboost"}))
     return plan
 
 

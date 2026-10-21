@@ -69,16 +69,40 @@ def blend(preds: list[np.ndarray], weights: np.ndarray) -> np.ndarray:
     return out
 
 
+def _plain_logloss(y: np.ndarray):
+    yi = y.astype(int)
+
+    def loss(p):
+        return float(-np.log(np.clip(p[np.arange(len(yi)), yi], 1e-12, 1)).mean())
+    return loss
+
+
 def build(metric_name: str, task: str, y: np.ndarray, oofs: list[np.ndarray], k: int,
           y_range: tuple | None = None, groups: np.ndarray | None = None) -> dict:
     """Fit blend weights + decision on OOF; returns weights, decision and the (cross-fitted,
-    when ``groups`` are given) score."""
-    loss = proxy_loss(metric_name, task, y, k)
-    weights, _ = greedy_blend(oofs, loss)
-    oof = blend(oofs, weights)
-    if groups is not None:
-        score, _, decision = postprocess.crossfit(metric_name, task, y, oof, groups, y_range=y_range)
-    else:
-        decision = postprocess.fit(metric_name, task, y, oof, y_range=y_range)
-        score = postprocess.score(metric_name, y, oof, decision)
-    return {"weights": weights.tolist(), "decision": decision, "score": score, "oof": oof}
+    when ``groups`` are given) score.
+
+    For label metrics two proxies are tried and the blend with the better real score is
+    kept: the class-balanced log loss rewards a class-weighted model merely for already
+    leaning towards rare classes (an advantage the decision rule removes), so on its own it
+    can lock onto that one model; plain log loss mixes calibrated models instead.
+    """
+    proxies = [proxy_loss(metric_name, task, y, k)]
+    m = metrics.REGISTRY[metric_name]
+    if task != metrics.REGRESSION and m.needs == "label" and metric_name in _BALANCED:
+        proxies.append(_plain_logloss(y))
+    best = None
+    for loss in proxies:
+        weights, _ = greedy_blend(oofs, loss)
+        if best is not None and np.allclose(weights, best["weights"]):
+            continue
+        oof = blend(oofs, weights)
+        if groups is not None:
+            score, _, decision = postprocess.crossfit(metric_name, task, y, oof, groups, y_range=y_range)
+        else:
+            decision = postprocess.fit(metric_name, task, y, oof, y_range=y_range)
+            score = postprocess.score(metric_name, y, oof, decision)
+        if best is None or m.better(score, best["score"]):
+            best = {"weights": weights, "decision": decision, "score": score, "oof": oof}
+    best["weights"] = np.asarray(best["weights"]).tolist()
+    return best

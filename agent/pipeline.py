@@ -113,6 +113,8 @@ class Pipeline:
                          seed=self.settings.seed if seed is None else seed, started_at=round(self.deadline.elapsed(), 1))
         est = self.estimate_seconds(model["family"])
         if timeout is None:
+            if model["family"] not in self.timings:
+                timeout_factor = max(timeout_factor, 5.0)  # first run of a family: estimate is a guess
             timeout = self.deadline.job_timeout(est, factor=timeout_factor, phase=phase, minimum=30.0)
         if timeout < 10:
             exp.status, exp.error = "skipped", "no time left"

@@ -123,3 +123,28 @@ def test_eval_mask_drops_rows_unseen_in_fold_but_not_in_test():
     te["state"] = ["s9"] * 40  # the test itself is unseen: keep everything
     mask2, info2 = profiler.eval_mask(tr, te, folds, ["state"])
     assert mask2.all() and not info2
+
+
+def test_blend_not_locked_on_class_weighted_model():
+    """Regression: the class-balanced proxy alone picked a class-weighted model by itself
+    (it already leans to rare classes); build() must keep the better of both proxies."""
+    r = np.random.default_rng(5)
+    n, k = 6000, 4
+    y = r.choice(k, n, p=[0.6, 0.25, 0.1, 0.05])
+    folds = r.integers(0, 5, n)
+
+    def model(noise_seed):
+        z = np.random.default_rng(noise_seed).normal(0, 1.2, (n, k))
+        z[np.arange(n), y] += 1.5
+        z += np.log([0.6, 0.25, 0.1, 0.05])
+        return np.exp(z) / np.exp(z).sum(1, keepdims=True)
+
+    a, b = model(1), model(2)
+    c = a * np.array([0.5, 1.0, 2.0, 4.0])
+    c /= c.sum(1, keepdims=True)  # "class-weighted" copy of a
+    oofs = [a, b, c]
+    balanced = ensemble.proxy_loss("f1_macro", "multiclass", y, k)
+    wb, _ = ensemble.greedy_blend(oofs, balanced)
+    only_balanced = postprocess.crossfit("f1_macro", "multiclass", y, ensemble.blend(oofs, wb), folds)[0]
+    res = ensemble.build("f1_macro", "multiclass", y, oofs, k, groups=folds)
+    assert res["score"] >= only_balanced - 1e-12
