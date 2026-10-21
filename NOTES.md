@@ -114,3 +114,21 @@ imports ⊆ requirements ✅ · no network libs outside llm_client ✅ · ZIP ro
 solution.py (23 files) ✅ · valid submission with the LLM unreachable ✅ (146 s) · valid
 submission after hard kills at 459 s and 636 s ✅ · offline Docker run on the real task-2
 data (network none, 8 CPUs) ✅ (peak RSS 0.81 GB).
+
+## Dress rehearsals (M10)
+
+- **Docker Desktop did not survive two 3-hour attempts.** Both times the daemon went away
+  (`error waiting for container: unexpected EOF`) when the Claude desktop app was quit:
+  attempt 1 after 23 min, attempt 2 after 1 h 44 min (197 experiments, 0 timeouts,
+  0 errors, peak 1.23 GB, OOF RMSE 45.93 -> 40.91 before it died).
+- **Root cause of the fragility:** the Claude app is an MSIX-packaged app. Its writes to
+  `%APPDATA%` are redirected into `AppData\Local\Packages\Claude_*\LocalCache\Roaming`, so
+  the uv-managed Python (and the venv that points to it) was invisible outside the app,
+  and processes started from the app die when it quits.
+- **Fix used:** `.venv\pyvenv.cfg` `home` now points to the interpreter's real path under
+  `LocalCache\Roaming\uv\python\...` (backup in `pyvenv.cfg.bak`), and the rehearsals run
+  as WMI-created processes (`harness\rehearse.cmd`), detached from the app.
+- **Rehearsal setting:** both tasks in parallel, local (no Docker), 6 CPU threads each
+  (12 logical threads on the dev box), 3-hour budget, mock LLM. 6 threads instead of the
+  platform's 8 makes it a conservative throughput estimate. The no-network property is
+  covered by the Docker runs (checklist item 2b and the ZIP verification).
