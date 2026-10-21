@@ -90,8 +90,10 @@ class Pipeline:
         n_features = n_features or self.meta.get("n_features", 10)
         hist = self.timings.get(family)
         if hist:
-            nf, s = hist[-1]
-            return s * max(0.5, n_features / max(nf, 1))
+            # Median of the last runs, each rescaled to this feature count: one quick
+            # trial (e.g. a high learning rate) must not shrink the next job's timeout.
+            scaled = [s * max(0.5, n_features / max(nf, 1)) for nf, s in hist[-5:]]
+            return float(np.median(scaled))
         ref = self.timings.get("lgbm") or self.timings.get("lgbm_fast")
         if ref:
             nf, s = ref[-1]
@@ -102,7 +104,8 @@ class Pipeline:
     # ------------------------------------------------------------------- running
     def run(self, name: str, model: dict, *, feature_ops: list | None = None, drop_cols: list | None = None,
             source: str = "zoo", hypothesis: str = "", timeout: float | None = None,
-            parent: str | None = None, seed: int | None = None, phase: str = "research") -> Experiment:
+            parent: str | None = None, seed: int | None = None, phase: str = "research",
+            timeout_factor: float = 3.0) -> Experiment:
         self._n += 1
         ops = self.base_ops if feature_ops is None else feature_ops
         exp = Experiment(id=f"e{self._n:03d}", name=name, source=source, model=model, feature_ops=ops,
@@ -110,7 +113,7 @@ class Pipeline:
                          seed=self.settings.seed if seed is None else seed, started_at=round(self.deadline.elapsed(), 1))
         est = self.estimate_seconds(model["family"])
         if timeout is None:
-            timeout = self.deadline.job_timeout(est, factor=3.0, phase=phase, minimum=30.0)
+            timeout = self.deadline.job_timeout(est, factor=timeout_factor, phase=phase, minimum=30.0)
         if timeout < 10:
             exp.status, exp.error = "skipped", "no time left"
             self._log(exp)

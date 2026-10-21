@@ -578,7 +578,10 @@ class ResearchLoop:
             idle = 0
             exp = self.pipe.run(f"r{it:02d}_{h['action'][:5]}_{fam}", kwargs["model"], feature_ops=kwargs["feature_ops"],
                                 drop_cols=kwargs["drop_cols"], source=h.get("source", "planner"),
-                                hypothesis=self._summary(h))
+                                hypothesis=self._summary(h),
+                                # new hyper-parameters (lower learning rate, bigger trees) can
+                                # cost several times the reference run
+                                timeout_factor=5.0 if h["action"] in ("tune", "model") else 3.0)
             rec = self._judge(h, exp)
             self._record(rec, h)
             if exp.status == "ok":
