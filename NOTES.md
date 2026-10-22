@@ -132,3 +132,18 @@ data (network none, 8 CPUs) ✅ (peak RSS 0.81 GB).
   (12 logical threads on the dev box), 3-hour budget, mock LLM. 6 threads instead of the
   platform's 8 makes it a conservative throughput estimate. The no-network property is
   covered by the Docker runs (checklist item 2b and the ZIP verification).
+- **Likely reason Docker died:** Docker Desktop was itself started from inside the app
+  (so it shared the app's process container) and went down with it.
+- **Completed end-to-end rehearsal (commit cd77a4e, 60-minute budget, both tasks):**
+  exit 0 in 3 415 s / 3 375 s, peak RSS 1.13 / 0.92 GB, task 1 test-like RMSE 33.25 (vs RF
+  40.20, norm. 17.3), task 2 macro-F1 0.6408 (vs RF 0.5724, norm. 16.0). The interrupted
+  3-hour run (host shutdown at ~1 h 56 min) left a valid file with the same scores.
+- **Fixes found by the rehearsals:** median-based time estimates and a 5x timeout for
+  tuning trials (6 of ~44 trials had timed out); first run of a family gets 5x; blend
+  selection tries plain and class-balanced log loss (the balanced proxy alone locked onto
+  the class-weighted model on task 2); research jobs capped at 25% of the window left;
+  tune/model hypotheses skipped for families without blend weight that cost >10% of it.
+- **Known efficiency item (not fixed):** CatBoost's cost estimate (3x LightGBM) is far
+  below reality on these tasks (9x on task 1, 16x on 10-class task 2: 18 min per run on 6
+  threads for macro-F1 0.596). It runs last in the zoo, so it only costs research time
+  (~8% of the 3-hour window on task 2), never the floor.

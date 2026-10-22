@@ -116,4 +116,83 @@ Environment overrides (all optional, platform runs set none): `AGENT_TIME_BUDGET
 
 ## Results
 
-See the results section at the end of this file (filled from the dress rehearsals).
+Test labels are hidden, so every score here is measured on a holdout carved from
+`train.csv` (`run_local.py --holdout`): the last period for task 1, a stratified 25%
+for task 2. "Normalized" applies the case's formula against the stronger of two simple
+baseline proxies (linear model, random forest) on the same holdout. For task 1 the
+`test_like` subset excludes holdout rows whose categories the training part never saw,
+because the real test has no such rows (see NOTES.md, "eval mask").
+
+### Public tasks: dress rehearsals
+
+Complete end-to-end rehearsals of the submission candidate (commit `cd77a4e`): local,
+6 CPU threads per task (both tasks in parallel on a 12-thread box, i.e. less compute than
+the platform's 8 CPUs), mock LLM, **60-minute budget**. Every phase ran and the process
+exited cleanly inside the budget.
+
+| Stage | Task 1 RMSE, OOF | Task 1 RMSE, holdout (test-like) | Norm. | Task 2 Macro F1, OOF | Task 2 Macro F1, holdout | Norm. |
+| --- | --- | --- | --- | --- | --- | --- |
+| a) fallback (quick model) | 45.93 | 36.43 | 9.4 | 0.6335 | 0.6317 | 13.9 |
+| b) core pipeline (model zoo) | 43.62 | 34.56 | 14.0 | 0.6426 | 0.6328 | 14.1 |
+| c) full agent (research + final) | 40.57 | **33.25** | **17.3** | 0.6512 | **0.6408** | **16.0** |
+| Baselines on the same holdout | — | linear 44.69, RF 40.20 | | — | linear 0.418, RF 0.572 | |
+
+| Run facts | Task 1 | Task 2 |
+| --- | --- | --- |
+| Wall time / budget | 3 415 s / 3 600 s | 3 375 s / 3 600 s |
+| Peak RSS (agent + workers) | 1.13 GB | 0.92 GB |
+| Experiments (ok / failed) | 69 / 0 | 26 / 5 (all handled) |
+| Accepted hypotheses | 6 | 2 (incl. ratio features: 0.6437 → 0.6512 OOF) |
+| LLM calls (mock) | 30 of 30 | 24 of 30 |
+
+**3-hour runs.** Three full-length attempts were cut short by the dev machine, not by the
+agent: Docker Desktop stopped twice (after 23 min and 1 h 44 min) and the host shut down
+once (after about 1 h 56 min). Each interrupted run had 0 timeouts and 0 errors, and the
+submission left on disk was valid; the 1 h 56 min run scored the same as the table above
+(task 1 test-like RMSE 33.25, task 2 macro-F1 0.6408). Peak RSS in the 1 h 44 min Docker
+run was 1.23 GB.
+
+On task 1's full holdout (including the 3 191 rows of a state the holdout's training
+part never saw) the agent scores RMSE 51.0 vs linear 49.1: trees extrapolate badly to an
+unseen state. The real test has no unseen states, which is why the test-like subset is the
+estimate for the platform.
+
+### Generalization suite: 14 synthetic unseen tasks (240 s each, mock LLM)
+
+All 14 finished within budget with a valid submission (`python -m harness.suite`).
+
+| Task | Metric | Agent | Linear | Random forest | Normalized |
+| --- | --- | --- | --- | --- | --- |
+| 400 features, 3 000 rows | ROC-AUC | 0.9561 | 0.8296 | 0.9079 | 52.3 |
+| 20% injected NaNs, renamed columns, time split | RMSLE | 0.5474 | 10.6055 | 0.7653 | 28.5 |
+| Datetime + text, time split | MAE | 1.9522 | 2.6199 | 2.6539 | 25.5 |
+| Ordinal grades | QWK | 0.4129 | 0.1633 | 0.2421 | 22.5 |
+| Probabilities for 5 classes | LogLoss | 0.3481 | 0.4465 | 0.5950 | 22.0 |
+| Attack vs normal | LogLoss | 0.0997 | 0.1449 | 0.1108 | 9.9 |
+| Handwritten digits | Macro F1 | 0.9735 | 0.9605 | 0.9707 | 9.4 |
+| Anonymised features, integer labels | Weighted F1 | 0.8154 | 0.7508 | 0.8001 | 7.6 |
+| Missing values in the target | MAE | 21.1441 | diverged | 21.6414 | 2.3 |
+| Two targets in one submission | RMSE | 43.19 / 25.86 | — | — | valid |
+| Building class (trivially separable) | ROC-AUC | 1.0000 | 0.9999 | 1.0000 | — |
+| 442 rows (diabetes) | R² | 0.4116 | 0.4543 | 0.3684 | 0 |
+| 569 rows (breast cancer) | F1 | 0.9531 | 0.9612 | 0.9206 | 0 |
+| 178 rows (wine) | Accuracy | 1.0000 | 1.0000 | 0.9787 | 0 (tie) |
+
+Tiny datasets are the known weak spot: on a few hundred rows the agent ties or trails a
+plain linear model. The tiny-task rows are from the re-run after cross-fitted decision
+rules and repeated CV were added.
+
+### Submission checklist (commit `cd77a4e`, `python -m harness.checklist`)
+
+| Check | Result |
+| --- | --- |
+| Imports ⊆ intersection of both requirements files | pass (`tests/test_imports.py`) |
+| No network libraries outside `agent/llm_client.py` | pass |
+| ZIP root contains `solution.py` | pass (23 files, no pyproject/uv.lock) |
+| ZIP unzipped into a clean folder and run in the offline Docker image | pass (exit 0, 210 s, valid file) |
+| Valid submission with the LLM unreachable | pass (180 s) |
+| Valid submission after hard kills at 459 s and 636 s | pass |
+| Offline Docker run on the real task-2 data (`--network none`, 8 CPUs) | pass (peak RSS 0.71 GB) |
+| Peak RAM < 28 GB | pass (1.13 GB max in the rehearsals) |
+| Finishes or saves within the budget | pass (57 of 60 min end to end; 3-hour runs interrupted by the host left valid files) |
+| Unit tests | 110 passed |
