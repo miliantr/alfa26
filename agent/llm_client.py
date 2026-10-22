@@ -131,6 +131,7 @@ class LLMClient:
         self.completion_tokens = 0
         self.failures = 0
         self.consecutive_failures = 0
+        self.timeouts = 0
         self.disabled_reason = ""
         self._cache: dict[str, str] = {}
         self._client = None
@@ -215,6 +216,7 @@ class LLMClient:
                 if self._extra_body_ok:
                     kw["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
                 resp = self._client.chat.completions.create(**kw)
+                self.timeouts = 0
                 msg = resp.choices[0].message
                 text = msg.content or ""
                 if not text.strip() and getattr(msg, "reasoning_content", None):
@@ -232,6 +234,15 @@ class LLMClient:
                 if status in (401, 403, 404):
                     self.disabled_reason = f"{name} {status}"
                     L.warning("LLM disabled: %s", self.disabled_reason)
+                    return None, 0, 0
+                if "Timeout" in name:
+                    # A server that let the request time out will not answer a retry
+                    # either; two timeouts mean it is hanging, so stop using it.
+                    self.timeouts += 1
+                    L.warning("LLM call timed out (%d so far)", self.timeouts)
+                    if self.timeouts >= 2:
+                        self.disabled_reason = f"{self.timeouts} timeouts"
+                        L.warning("LLM disabled for the rest of the run: %s", self.disabled_reason)
                     return None, 0, 0
                 L.warning("LLM call failed (%s %s), attempt %d", name, status, attempt + 1)
                 if attempt < 2:

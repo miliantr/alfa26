@@ -150,7 +150,8 @@ def run(task_md: Path) -> None:
     try:
         if llm.available():
             view = llm.chat_json(PARSE_SYSTEM, llm_parse_prompt(spec), schema=LLM_SCHEMA, max_tokens=700,
-                                 purpose="task_parse", timeout=min(90.0, settings.llm_timeout)) or {}
+                                 # short: this call sits before the first real model
+                                 purpose="task_parse", timeout=min(45.0, settings.llm_timeout)) or {}
             if view and not multi:
                 kind_before = spec.output_kind
                 spec = merge_llm_view(spec, view)

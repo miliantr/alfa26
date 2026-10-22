@@ -268,15 +268,23 @@ class ResearchLoop:
         pipe, spec, p = self.pipe, self.spec, self.prof
         champ = self.champ
         best = pipe.best()
+        # Token budget: full detail (kind, cardinality, missingness, a short dictionary
+        # description) only for the 20 most important columns; the rest by name. Sending
+        # every column with its Russian description made each call ~4-5k tokens.
         cols = []
         dd = {str(r.get("feature")): r for r in spec.dictionary}
-        for c in p.features[:60]:
+        imp = [n for n, _ in (champ.importance if champ else [])]
+        ordered = [c for c in imp if c in p.columns] + [c for c in p.features if c not in imp]
+        for c in ordered[:20]:
             ci = p.columns[c]
             d = dd.get(c, {})
-            desc = (str(d.get("description_ru") or "")[:60] + (f" [{d.get('unit')}]" if d.get("unit") else "")).strip()
+            desc = (str(d.get("description_ru") or "")[:40] + (f" [{d.get('unit')}]" if d.get("unit") else "")).strip()
             cols.append(f"{c}:{ci['kind']} nun={ci['n_unique']} na={ci['missing']:.2f}" + (f" | {desc}" if desc else ""))
+        rest = [c for c in ordered[20:] if c in p.columns]
+        if rest:
+            cols.append(("other columns: " + ", ".join(rest))[:1200])
         journal = []
-        for h in self.history[-14:]:
+        for h in self.history[-10:]:
             journal.append(f"{h['exp_id']} {h['summary']} -> {h.get('score')} "
                            f"(delta {h.get('delta'):+.5f}, {'KEPT' if h.get('accepted') else 'rejected'}"
                            f"{', ' + h['note'] if h.get('note') else ''})" if h.get("delta") is not None else
@@ -287,7 +295,7 @@ class ResearchLoop:
                      "rows": {"train": p.n_train, "test": p.n_test}},
             "time_left_min": round(self.deadline.research_remaining() / 60, 1),
             "llm_calls_left": (self.llm.max_calls - self.llm.calls) if self.llm else 0,
-            "description_excerpt": _excerpt(spec.text),
+            "description_excerpt": _excerpt(spec.text, 800),
             "domain_notes": self.domain_notes[:400],
             "columns": cols,
             "validation": {k: v for k, v in p.validation.items() if k != "eval_mask"},
