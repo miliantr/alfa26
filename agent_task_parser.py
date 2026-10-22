@@ -13,8 +13,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import log, metrics
-from .io_utils import read_csv, read_header
+import agent_log as log
+import agent_metrics as metrics
+from agent_io_utils import read_csv, read_header
 
 L = log.get("task")
 

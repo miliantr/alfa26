@@ -17,9 +17,9 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, StandardScaler
 
-from agent import metrics
-from agent.io_utils import read_csv
-from agent.task_parser import TaskSpec
+import agent_metrics as metrics
+from agent_io_utils import read_csv
+from agent_task_parser import TaskSpec
 
 
 def _split_cols(df: pd.DataFrame) -> tuple[list[str], list[str]]:
@@ -50,7 +50,7 @@ def _pipeline(kind: str, is_reg: bool, num: list[str], cat: list[str], n_jobs: i
 
 def run_proxy(spec: TaskSpec, kind: str, out_path: Path, n_jobs: int = 8) -> Path:
     """Fit the proxy on the task's train.csv and write a submission-style file."""
-    from agent.submission import SubmissionTemplate
+    from agent_submission import SubmissionTemplate
 
     train = read_csv(Path(spec.train_path))
     test = read_csv(Path(spec.test_path))

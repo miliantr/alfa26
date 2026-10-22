@@ -12,7 +12,8 @@ from dataclasses import asdict, dataclass, field
 import numpy as np
 import pandas as pd
 
-from . import log, metrics
+import agent_log as log
+import agent_metrics as metrics
 
 L = log.get("profile")
 

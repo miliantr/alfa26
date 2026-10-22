@@ -5,8 +5,10 @@ import re
 import sys
 from pathlib import Path
 
+from harness.ship import code_files, local_modules
+
 REPO = Path(__file__).resolve().parents[1]
-SHIPPED = [REPO / "solution.py", *sorted((REPO / "agent").rglob("*.py"))]
+SHIPPED = code_files(REPO)
 
 # distribution name -> import names
 DIST_TO_MODULES = {
@@ -56,7 +58,7 @@ def test_requirements_intersection_is_sane():
 
 
 def test_shipped_imports_are_allowed():
-    allowed = allowed_modules() | set(sys.stdlib_module_names) | {"agent"}
+    allowed = allowed_modules() | set(sys.stdlib_module_names) | local_modules(REPO)
     bad = {}
     for p in SHIPPED:
         extra = imported_top_modules(p) - allowed
@@ -66,11 +68,11 @@ def test_shipped_imports_are_allowed():
 
 
 def test_no_network_libraries_besides_llm_client():
-    """Only agent/llm_client.py may talk to the network (the organizers' LLM endpoint)."""
+    """Only agent_llm_client.py may talk to the network (the organizers' LLM endpoint)."""
     net = {"socket", "urllib", "http", "httpx", "openai", "requests", "aiohttp", "ftplib", "smtplib"}
     offenders = {}
     for p in SHIPPED:
-        if p.name in ("llm_client.py", "sandbox.py"):
+        if p.name in ("agent_llm_client.py", "agent_sandbox.py"):
             continue
         used = imported_top_modules(p) & net
         if used:

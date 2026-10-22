@@ -7,7 +7,8 @@
 Checks
   1. imports ⊆ requirements intersection          (pytest tests/test_imports.py)
   2. no network except the LLM endpoint            (static test + an offline Docker run)
-  3. ZIP root contains solution.py                 (build + inspect)
+  3. flat ZIP: solution.py, agent_*.py and          (build + inspect; the platform copies
+     requirements.txt at the root, no subfolders     only root-level files)
   4. submission exists when the LLM is down        (unreachable endpoint + fake key)
   5. submission exists when killed after minute 5  (hard kill at two arbitrary moments)
   6. peak RAM < 28 GB and 7. finish within 3 h     (from dress-rehearsal reports)
@@ -54,13 +55,14 @@ def main() -> int:
 
     sh = subprocess.run(["bash", str(REPO / "make_submission.sh")], cwd=str(REPO), capture_output=True, text=True)
     zips = sorted((REPO / "dist").glob("submission_*.zip"), key=lambda p: p.stat().st_mtime)
-    if zips:
+    if sh.returncode == 0 and zips:
         names = zipfile.ZipFile(zips[-1]).namelist()
-        results["3_zip_root_has_solution_py"] = "solution.py" in names
+        results["3_zip_flat_root"] = ({"solution.py", "requirements.txt"} <= set(names)
+                                      and not any("/" in n for n in names))
         results["3_zip"] = {"path": str(zips[-1]), "files": len(names),
                             "forbidden": [n for n in names if n.endswith(("pyproject.toml", "uv.lock", ".csv"))]}
     else:
-        results["3_zip_root_has_solution_py"] = False
+        results["3_zip_flat_root"] = False
         results["3_zip"] = sh.stderr[-500:]
 
     down = _run_local(["--task", args.task, "--time-budget", "240", "--llm", "real"],

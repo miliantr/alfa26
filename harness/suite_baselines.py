@@ -11,8 +11,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from agent import metrics  # noqa: E402
-from agent.task_parser import parse_task  # noqa: E402
+import agent_metrics as metrics  # noqa: E402
+from agent_task_parser import parse_task  # noqa: E402
 from harness.baseline_proxy import run_proxy  # noqa: E402
 from harness.scoring import score_submission  # noqa: E402
 

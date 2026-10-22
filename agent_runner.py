@@ -22,16 +22,18 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import log, metrics, profiler
-from .config import load_settings
-from .deadline import Deadline
-from .features import prepare_base
-from .io_utils import read_csv, write_json
-from .llm_client import make_client
-from .pipeline import Pipeline
-from .resources import detect_cpus, detect_memory_bytes, snapshot
-from .submission import SubmissionTemplate
-from .task_parser import LLM_SCHEMA, PARSE_SYSTEM, llm_parse_prompt, merge_llm_view, parse_task, sub_spec
+import agent_log as log
+import agent_metrics as metrics
+import agent_profiler as profiler
+from agent_config import load_settings
+from agent_deadline import Deadline
+from agent_features import prepare_base
+from agent_io_utils import read_csv, write_json
+from agent_llm_client import make_client
+from agent_pipeline import Pipeline
+from agent_resources import detect_cpus, detect_memory_bytes, snapshot
+from agent_submission import SubmissionTemplate
+from agent_task_parser import LLM_SCHEMA, PARSE_SYSTEM, llm_parse_prompt, merge_llm_view, parse_task, sub_spec
 
 
 def make_run_dir(task_md: Path, configured: str | None) -> Path:
@@ -265,7 +267,7 @@ def solve_target(spec, tpl, settings, deadline, run_dir, llm, view, L, summary, 
 
         # ---- phase 3: AutoResearch ----------------------------------------------
         try:
-            from .research_loop import ResearchLoop
+            from agent_research_loop import ResearchLoop
 
             ResearchLoop(pipe, spec, prof, settings, deadline, run_dir, llm=llm, raw_frames=raw_frames,
                          base_X=Xtr, domain_notes=str(view.get("domain_notes", ""))).run()
@@ -327,7 +329,7 @@ def _assemble(spec, tpl: SubmissionTemplate, subs: dict, L) -> bool:
         if errs:
             L.error("assembled submission invalid: %s", errs[:3])
             return False
-        from .io_utils import atomic_write_csv
+        from agent_io_utils import atomic_write_csv
 
         inputs = {Path(p).resolve() for p in (spec.train_path, spec.test_path, spec.sample_path, spec.dict_path) if p}
         ok = False

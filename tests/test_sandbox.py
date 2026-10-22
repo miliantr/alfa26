@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from agent import sandbox
+import agent_sandbox as sandbox
 
 
 @pytest.fixture

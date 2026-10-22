@@ -25,9 +25,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import log
-from .io_utils import read_json, write_json
-from .resources import kill_tree, rss_tree
+import agent_log as log
+from agent_io_utils import read_json, write_json
+from agent_resources import kill_tree, rss_tree
 
 L = log.get("sandbox")
 

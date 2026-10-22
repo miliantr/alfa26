@@ -1,6 +1,6 @@
 import time
 
-from agent.deadline import Deadline
+from agent_deadline import Deadline
 
 
 def test_phases_ordered_and_budget_respected():

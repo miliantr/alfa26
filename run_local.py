@@ -29,10 +29,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO))
 
-from agent import metrics  # noqa: E402
-from agent.io_utils import write_json  # noqa: E402
-from agent.submission import SubmissionTemplate, check_file  # noqa: E402
-from agent.task_parser import parse_task  # noqa: E402
+import agent_metrics as metrics  # noqa: E402
+from agent_io_utils import write_json  # noqa: E402
+from agent_submission import SubmissionTemplate, check_file  # noqa: E402
+from agent_task_parser import parse_task  # noqa: E402
 
 DOCKER_IMAGE = "alfa-automl-platform:py312"
 
@@ -49,7 +49,7 @@ class PeakRSS(threading.Thread):
         self.pid, self.peak, self.stop = pid, 0, False
 
     def run(self):
-        from agent.resources import rss_tree
+        from agent_resources import rss_tree
 
         while not self.stop:
             self.peak = max(self.peak, rss_tree(self.pid))
@@ -72,13 +72,20 @@ def _env(args) -> dict:
 
 
 def _stage_solution(sol_dir: Path, dest: Path) -> Path:
-    """Copy only what ships in the ZIP (solution.py + agent/) when running from the repo."""
+    """Copy what the platform would: from the repo the files that ship in the ZIP, from an
+    unzipped ZIP only its root-level .py files and requirements.txt (subfolders are dropped)."""
+    from harness.ship import zip_members
+
     if (sol_dir / ".git").exists() or (sol_dir / ".venv").exists():
-        dest.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(sol_dir / "solution.py", dest / "solution.py")
-        shutil.copytree(sol_dir / "agent", dest / "agent", ignore=shutil.ignore_patterns("__pycache__"))
-        return dest
-    return sol_dir
+        files = zip_members(sol_dir)
+    else:
+        files = {p.name: p for p in sol_dir.glob("*.py")}
+        if (sol_dir / "requirements.txt").exists():
+            files["requirements.txt"] = sol_dir / "requirements.txt"
+    dest.mkdir(parents=True, exist_ok=True)
+    for name, src in files.items():
+        shutil.copy2(src, dest / name)
+    return dest
 
 
 def _docker_peak_mb(name: str) -> float:
@@ -95,15 +102,16 @@ def _docker_peak_mb(name: str) -> float:
 
 def _launch_docker(args, task_md: Path, run_root: Path, log_f) -> tuple[int | None, float, int, bool]:
     """docker create + cp avoids host bind mounts (Docker Desktop file-sharing settings).
-    The agent runs as a non-root user and its own code dir is root-owned (read-only)."""
+    Platform layout: the solution files are copied into the task directory and run from
+    there as `python3 solution.py task.md`, as a non-root user."""
     env = _env(args)
     name = f"alfa_run_{int(time.time())}"
     sol = _stage_solution(Path(args.solution_dir).resolve(), run_root / "solution_stage")
     timeout_s = int(args.kill_at or args.time_budget)
-    inner = (f"timeout -s KILL {timeout_s} python /solution/solution.py /task/{task_md.name}")
+    inner = f"timeout -s KILL {timeout_s} python3 solution.py {task_md.name}"
     shell = f"chown -R runner:runner /task && exec su -p runner -s /bin/sh -c '{inner}'"
     cmd = ["docker", "create", "--name", name, "--network", "none", f"--cpus={args.cpus}",
-           f"--memory={args.memory}", "--memory-swap", args.memory, "--user", "0", "-w", "/tmp",
+           f"--memory={args.memory}", "--memory-swap", args.memory, "--user", "0", "-w", "/task",
            "-e", "HOME=/tmp"]
     for k in ("AGENT_TIME_BUDGET", "AGENT_LLM_MODE", "PYTHONIOENCODING"):
         cmd += ["-e", f"{k}={env[k]}"]
@@ -112,8 +120,8 @@ def _launch_docker(args, task_md: Path, run_root: Path, log_f) -> tuple[int | No
     cmd += [args.image, "sh", "-c", shell]
     print("launch:", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, capture_output=True)
-    subprocess.run(["docker", "cp", f"{sol}{os.sep}.", f"{name}:/solution"], check=True, capture_output=True)
     subprocess.run(["docker", "cp", f"{task_md.parent}{os.sep}.", f"{name}:/task"], check=True, capture_output=True)
+    subprocess.run(["docker", "cp", f"{sol}{os.sep}.", f"{name}:/task"], check=True, capture_output=True)
     t0 = time.time()
     proc = subprocess.Popen(["docker", "start", "-a", name], stdout=log_f, stderr=subprocess.STDOUT)
     peak_mb, killed = 0.0, False
@@ -153,7 +161,7 @@ def _launch(args, task_md: Path, run_root: Path) -> tuple[int | None, float, int
         rc = proc.wait(timeout=kill_at)
     except subprocess.TimeoutExpired:
         killed = True
-        from agent.resources import kill_tree
+        from agent_resources import kill_tree
 
         kill_tree(proc.pid)
         rc = None

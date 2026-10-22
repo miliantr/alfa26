@@ -47,7 +47,8 @@ def load_settings() -> Settings:
     mode = os.environ.get("AGENT_LLM_MODE", "").strip().lower()
     if mode in ("real", "mock", "off"):
         s.llm_mode = mode
-    elif not (os.environ.get("OPENAI_MODEL") and os.environ.get("OPENAI_API_KEY")):
+    elif not (os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_BASE_URL")):
+        # The platform sets the key and the proxy address; OPENAI_MODEL is optional.
         s.llm_mode = "off"
     s.run_dir = os.environ.get("AGENT_RUN_DIR") or None
     s.seed = _env_int("AGENT_SEED", s.seed)

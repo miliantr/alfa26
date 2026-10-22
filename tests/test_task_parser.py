@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from agent import task_parser
+import agent_task_parser as task_parser
 from harness.synth import make_frame, write_task
 
 REPO = Path(__file__).resolve().parents[1]

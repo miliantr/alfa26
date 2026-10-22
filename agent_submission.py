@@ -10,9 +10,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import log, metrics
-from .io_utils import atomic_write_csv, read_csv
-from .task_parser import TaskSpec
+import agent_log as log
+import agent_metrics as metrics
+from agent_io_utils import atomic_write_csv, read_csv
+from agent_task_parser import TaskSpec
 
 L = log.get("submission")
 

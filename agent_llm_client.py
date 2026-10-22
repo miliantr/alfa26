@@ -1,7 +1,8 @@
 """LLM access with hard budgets, caching, retries and strict JSON parsing.
 
 Only the organizers' OpenAI-compatible endpoint from ``OPENAI_BASE_URL`` /
-``OPENAI_API_KEY`` / ``OPENAI_MODEL`` is ever contacted. Every failure mode (no
+``OPENAI_API_KEY`` is ever contacted (model from ``OPENAI_MODEL``, else the documented
+name: the organizers' proxy substitutes the task's model anyway). Every failure mode (no
 credentials, timeouts, HTTP errors, garbage output, exhausted budget) returns ``None``
 and the caller falls back to deterministic logic. After ``max_failures`` consecutive
 failures the client disables itself for the rest of the run.
@@ -18,12 +19,21 @@ import re
 import time
 from pathlib import Path
 
-from . import log
-from .io_utils import append_jsonl, dumps
+import agent_log as log
+from agent_io_utils import append_jsonl, dumps
 
 L = log.get("llm")
 
 _THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
+DEFAULT_MODEL = "qwen/qwen3.8-27b"
+# Ways to switch Qwen3 thinking off, tried in order; a 400 moves to the next one. The
+# organizers' proxy honours reasoning_effort (and ignores /no_think), a bare vLLM server
+# honours chat_template_kwargs but may reject reasoning_effort="none".
+_NO_THINK = (
+    {"reasoning_effort": "none", "chat_template_kwargs": {"enable_thinking": False}},
+    {"chat_template_kwargs": {"enable_thinking": False}},
+    None,
+)
 
 
 # ----------------------------------------------------------------------- JSON utils
@@ -135,10 +145,12 @@ class LLMClient:
         self.disabled_reason = ""
         self._cache: dict[str, str] = {}
         self._client = None
-        self._extra_body_ok = True
-        self.model = os.environ.get("OPENAI_MODEL", "")
-        if mode == "real" and not (self.model and os.environ.get("OPENAI_API_KEY")):
-            self.mode, self.disabled_reason = "off", "missing OPENAI_MODEL/OPENAI_API_KEY"
+        self._no_think = 0  # index into _NO_THINK
+        self.last_truncated = False  # the last reply stopped at max_tokens (repaired JSON)
+        self.model = os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+        # Without OPENAI_BASE_URL the SDK would fall back to api.openai.com: never contact it.
+        if mode == "real" and not (os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENAI_BASE_URL")):
+            self.mode, self.disabled_reason = "off", "missing OPENAI_API_KEY/OPENAI_BASE_URL"
         self._mock_calls = 0
 
     # ---------------------------------------------------------------- status
@@ -167,6 +179,7 @@ class LLMClient:
             return None
 
     def _chat_json(self, system, user, schema, max_tokens, temperature, purpose, timeout):
+        self.last_truncated = False
         est_prompt = (len(system) + len(user)) // 3
         if not self.available(reserve_tokens=est_prompt + max_tokens):
             return None
@@ -208,28 +221,45 @@ class LLMClient:
             self._client = OpenAI(timeout=self.timeout, max_retries=0)
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": user + "\n/no_think"}]
-        delay = 2.0
-        for attempt in range(3):
+        delay, attempt, widened = 2.0, 0, False
+        while attempt < 3:
             try:
                 kw = dict(model=self.model, messages=messages, temperature=temperature, max_tokens=max_tokens,
                           timeout=min(self.timeout, timeout or self.timeout))
-                if self._extra_body_ok:
-                    kw["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
+                if _NO_THINK[self._no_think]:
+                    kw["extra_body"] = _NO_THINK[self._no_think]
                 resp = self._client.chat.completions.create(**kw)
                 self.timeouts = 0
-                msg = resp.choices[0].message
+                choice = resp.choices[0]
+                msg = choice.message
                 text = msg.content or ""
-                if not text.strip() and getattr(msg, "reasoning_content", None):
-                    text = msg.reasoning_content
                 u = getattr(resp, "usage", None)
-                pt = getattr(u, "prompt_tokens", None) or (len(system) + len(user)) // 3
-                ct = getattr(u, "completion_tokens", None) or len(text) // 3
-                return text, int(pt), int(ct)
+                pt = int(getattr(u, "prompt_tokens", None) or (len(system) + len(user)) // 3)
+                ct = int(getattr(u, "completion_tokens", None) or len(text) // 3)
+                if not text.strip():
+                    reasoning = getattr(msg, "reasoning_content", None) or ""
+                    if choice.finish_reason == "length":
+                        # The budget went on reasoning; a cut-off reasoning is not an answer.
+                        self.prompt_tokens += pt
+                        self.completion_tokens += ct
+                        if widened or max_tokens >= 4000:
+                            L.warning("LLM reply cut off while reasoning (%d tokens)", ct)
+                            return None, 0, 0
+                        max_tokens, widened = min(4000, max_tokens * 3), True
+                        continue
+                    # Some vLLM reasoning parsers put a finished answer there.
+                    text = reasoning
+                self.last_truncated = choice.finish_reason == "length"
+                return text, pt, ct
             except Exception as e:  # noqa: BLE001
                 name = type(e).__name__
                 status = getattr(e, "status_code", None)
-                if self._extra_body_ok and status == 400:
-                    self._extra_body_ok = False  # server rejects vLLM-specific options
+                if "budget" in str(e).lower() and "exceed" in str(e).lower():
+                    self.disabled_reason = "key budget exceeded"
+                    L.warning("LLM disabled: %s", self.disabled_reason)
+                    return None, 0, 0
+                if status == 400 and self._no_think < len(_NO_THINK) - 1:
+                    self._no_think += 1  # the server rejects these options; try the next set
                     continue
                 if status in (401, 403, 404):
                     self.disabled_reason = f"{name} {status}"
@@ -244,8 +274,9 @@ class LLMClient:
                         self.disabled_reason = f"{self.timeouts} timeouts"
                         L.warning("LLM disabled for the rest of the run: %s", self.disabled_reason)
                     return None, 0, 0
-                L.warning("LLM call failed (%s %s), attempt %d", name, status, attempt + 1)
-                if attempt < 2:
+                attempt += 1
+                L.warning("LLM call failed (%s %s), attempt %d", name, status, attempt)
+                if attempt < 3:
                     time.sleep(delay)
                     delay *= 2
         return None, 0, 0
@@ -287,7 +318,7 @@ class LLMClient:
 
     @staticmethod
     def _mock_task(user: str) -> str:
-        from .metrics import extract_primary_metric
+        from agent_metrics import extract_primary_metric
 
         metric, mentioned = extract_primary_metric(user)
         tt = "regression" if metric in ("rmse", "mae", "mse", "rmsle", "r2", "mape") else "multiclass"

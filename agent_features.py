@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import log
+import agent_log as log
 
 L = log.get("features")
 
@@ -99,8 +99,12 @@ def _safe_name(s: str) -> str:
     return re.sub(r"[^\w]+", "_", s)[:80]
 
 
+def _freq_args(Xtr, ctx, cols=None, **_):
+    return {"cols": [c for c in (cols or cat_columns(Xtr)) if c in Xtr.columns]}
+
+
 def r_freq_encoding(Xtr, Xte, ctx, cols=None, **_):
-    cols = [c for c in (cols or cat_columns(Xtr)) if c in Xtr.columns]
+    cols = _freq_args(Xtr, ctx, cols)["cols"]
     a, b = {}, {}
     for c in cols:
         key = Xtr[c].astype(str)
@@ -188,11 +192,16 @@ def r_row_stats(Xtr, Xte, ctx, groups=None, **_):
     return pd.DataFrame(a).astype("float32"), pd.DataFrame(b).astype("float32")
 
 
-def r_group_stats(Xtr, Xte, ctx, cats=None, nums=None, top_cat=3, top_num=5, **_):
+def _group_stats_args(Xtr, ctx, cats=None, nums=None, top_cat=3, top_num=5, **_):
     imp = ctx.get("importance", [])
     allc, alln = cat_columns(Xtr), num_columns(Xtr)
-    cats = cats or ([c for c in imp if c in allc][:top_cat] or allc[:top_cat])
-    nums = nums or ([c for c in imp if c in alln][:top_num] or alln[:top_num])
+    return {"cats": cats or ([c for c in imp if c in allc][:top_cat] or allc[:top_cat]),
+            "nums": nums or ([c for c in imp if c in alln][:top_num] or alln[:top_num])}
+
+
+def r_group_stats(Xtr, Xte, ctx, cats=None, nums=None, top_cat=3, top_num=5, **_):
+    resolved = _group_stats_args(Xtr, ctx, cats, nums, top_cat, top_num)
+    cats, nums = resolved["cats"], resolved["nums"]
     a, b = {}, {}
     for g in cats:
         if g not in Xtr.columns:
@@ -251,13 +260,18 @@ def r_text_tfidf_svd(Xtr, Xte, ctx, n_components=16, **_):
     return pd.DataFrame(a), pd.DataFrame(b)
 
 
+def _make_key_args(Xtr, ctx, cols=None, name=None, **_):
+    cols = [c for c in (cols or []) if c in Xtr.columns]
+    return {"cols": cols, "name": name or "key__" + "__".join(_safe_name(c) for c in cols)[:60]}
+
+
 def r_make_key(Xtr, Xte, ctx, cols=None, name=None, **_):
     """Composite identity key (e.g. a building = state + type + area + year built) as a
     categorical; pair it with target encoding to pass an entity's history to the model."""
-    cols = [c for c in (cols or []) if c in Xtr.columns]
+    resolved = _make_key_args(Xtr, ctx, cols, name)
+    cols, name = resolved["cols"], resolved["name"]
     if len(cols) < 1:
         return pd.DataFrame(), pd.DataFrame()
-    name = name or "key__" + "__".join(_safe_name(c) for c in cols)[:60]
 
     def key(df):
         parts = [df[c].astype(str) for c in cols]
@@ -291,6 +305,17 @@ RECIPES = {
     "text_tfidf_svd": r_text_tfidf_svd,
     "make_key": r_make_key,
     "cached_columns": r_cached_columns,
+}
+
+# Recipes whose output depends on statistics of the rows they are fitted on. They are
+# built once on the whole train, then refitted inside every CV fold (refit_in_fold):
+# otherwise a validation fold's own rows shape its features, which the test's rows never
+# do. On a time split that made CV accept a feature that hurt the next period.
+# Each entry resolves the recipe's arguments, so the build and the refits use the same.
+STATEFUL = {
+    "freq_encoding": _freq_args,
+    "group_stats": _group_stats_args,
+    "make_key": _make_key_args,
 }
 
 RECIPE_DOCS = {
@@ -336,12 +361,17 @@ def build_features(Xtr: pd.DataFrame, Xte: pd.DataFrame, ops: list[dict], ctx: d
                 info["ops"].append({"op": name, "removed": cols})
                 continue
             fn = RECIPES[name]
-            na, nb = fn(A, B, {**ctx, **op.get("ctx", {})}, **args)
+            op_ctx = {**ctx, **op.get("ctx", {})}
+            refit = STATEFUL[name](A, op_ctx, **args) if name in STATEFUL else None
+            na, nb = fn(A, B, op_ctx, **(refit if refit is not None else args))
             na, nb = _validate_new(na, nb, A, B)
             if na.shape[1]:
                 A = pd.concat([A, na], axis=1)
                 B = pd.concat([B, nb], axis=1)
-            info["ops"].append({"op": name, "added": list(na.columns)})
+            entry = {"op": name, "added": list(na.columns)}
+            if refit is not None:
+                entry["refit"] = refit
+            info["ops"].append(entry)
         except Exception as e:  # a broken recipe is skipped, never fatal
             info["errors"].append(f"{name}: {e!r}")
             L.warning("recipe %s failed: %r", name, e)
@@ -353,6 +383,34 @@ def build_features(Xtr: pd.DataFrame, Xte: pd.DataFrame, ops: list[dict], ctx: d
         except Exception:
             pass
     return A, B, info
+
+
+def has_refit(info: dict) -> bool:
+    return any(op.get("refit") is not None and op.get("added") for op in info.get("ops", []))
+
+
+def refit_in_fold(Xtr: pd.DataFrame, Xte: pd.DataFrame, info: dict, tr: np.ndarray, va: np.ndarray,
+                  ctx: dict) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Fold frames (train rows, validation rows, test) with the numeric columns of every
+    stateful recipe refitted on the fold's training rows only, as the test's columns are
+    fitted on train only. A recipe that cannot be refitted keeps its full-train values."""
+    A = Xtr.iloc[tr].reset_index(drop=True)
+    BC = pd.concat([Xtr.iloc[va], Xte], ignore_index=True)
+    for op in info.get("ops", []):
+        args = op.get("refit")
+        cols = [c for c in op.get("added", []) if c in A.columns and pd.api.types.is_float_dtype(A[c])]
+        if args is None or not cols:
+            continue
+        try:
+            na, nb = RECIPES[op["op"]](A, BC, ctx, **args)
+        except Exception as e:  # noqa: BLE001
+            L.warning("refit of %s failed: %r", op["op"], e)
+            continue
+        for c in cols:
+            if c in na.columns and len(na) == len(A) and len(nb) == len(BC):
+                A[c] = na[c].to_numpy(dtype=A[c].dtype)
+                BC[c] = nb[c].to_numpy(dtype=BC[c].dtype)
+    return A, BC.iloc[:len(va)].reset_index(drop=True), BC.iloc[len(va):].reset_index(drop=True)
 
 
 def _validate_new(na: pd.DataFrame, nb: pd.DataFrame, A: pd.DataFrame, B: pd.DataFrame):

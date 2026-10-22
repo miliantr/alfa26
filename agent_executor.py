@@ -7,16 +7,16 @@ import sys
 import time
 from pathlib import Path
 
-from . import log
-from .io_utils import read_json, write_json
-from .resources import kill_tree, rss_tree
+import agent_log as log
+from agent_io_utils import read_json, write_json
+from agent_resources import kill_tree, rss_tree
 
 L = log.get("executor")
-PKG_ROOT = Path(__file__).resolve().parents[1]
+PKG_ROOT = Path(__file__).resolve().parent
 
 
 def run_job(job: dict, job_dir: Path, timeout: float, mem_limit: int, n_jobs: int,
-            module: str = "agent.worker") -> dict:
+            module: str = "agent_worker") -> dict:
     job_dir.mkdir(parents=True, exist_ok=True)
     job = {**job, "out_dir": str(job_dir), "n_jobs": n_jobs}
     write_json(job_dir / "job.json", job)

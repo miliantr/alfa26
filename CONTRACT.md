@@ -1,7 +1,9 @@
 # Platform contract
 
 Source of truth: `baseline.py` (organizers), the two `task.md` files shipped with the
-public tasks, and the case PDF ("Альфа Хак_AutoML"). Everything in the agent must stay
+public tasks, the case PDF ("Альфа Хак_AutoML") and the organizers' key and upload
+instructions ("AutoML_Инструкция по ключам", linked from the API-key email; cited as
+"key instructions"). Everything in the agent must stay
 consistent with this file. Facts are marked with their source; anything we inferred is
 marked **[assumption]** and is also listed in `NOTES.md`.
 
@@ -10,21 +12,23 @@ marked **[assumption]** and is also listed in `NOTES.md`.
 | Item | Value | Source |
 |---|---|---|
 | Entry point | `solution.py` at the **root** of the ZIP; other modules may sit next to it | PDF p.6 |
-| Command | `OPENAI_API_KEY=... OPENAI_MODEL=... OPENAI_BASE_URL=... uv run baseline.py task.md` → for us `uv run solution.py task.md` (or `python solution.py task.md`) | `baseline.py` docstring |
+| ZIP layout | **Only the root-level `.py` files and `requirements.txt` are copied** into the task directory. Subfolders, data, `.whl` and config files are dropped; a module in a subfolder is missing at run time ("may score 0"). Hence our flat `agent_*.py` modules | key instructions |
+| Command | `python3 solution.py task.md`, run inside the task directory (the solution files sit next to `task.md`). The baseline docstring shows `uv run baseline.py task.md` with the three env vars | key instructions, `baseline.py` docstring |
 | Positional arg | `sys.argv[1]` = path to the task Markdown file; default `task.md` (relative to cwd) | `baseline.py` `__main__` |
 | Path resolution | Relative paths are relative to the **directory of the task Markdown file** (`task_path.resolve().parent`); the baseline's tool subprocess runs with `cwd = task_path.parent` | `baseline.py` (`run_python` doc, `StdioServerParameters(cwd=...)`), `task.md` ("Пути указаны относительно каталога этого Markdown-файла") |
-| Working dir | Not guaranteed to be the task dir **[assumption]** → resolve everything from `task.md`'s location, never from cwd | — |
+| Working dir | The task directory. We still resolve everything from `task.md`'s location, never from cwd, so other layouts work too | key instructions |
+| Scratch files | Allowed in the task directory, its subdirectories and `/tmp` | key instructions |
 | `--mcp-server` | Internal self-invocation of the baseline only; the platform does not pass it | `baseline.py` |
 | Python | 3.12, Docker container | PDF p.6–7 |
-| Dependencies | Pre-installed from `requirements.txt`; no installs at runtime (no internet) | PDF p.7 |
+| Dependencies | Installed by the platform from the ZIP's root `requirements.txt` (the provided list; no extra packages or `.whl`); no installs at runtime | PDF p.7, key instructions |
 
 ## 2. Environment variables
 
 | Var | Meaning | How we use it |
 |---|---|---|
-| `OPENAI_API_KEY` | key for the organizers' LLM endpoint | read implicitly by `openai.OpenAI()`; never logged |
-| `OPENAI_BASE_URL` | OpenAI-compatible endpoint URL | read implicitly by `openai.OpenAI()`; the **only** network destination we ever contact |
-| `OPENAI_MODEL` | model name (Qwen3.8-27B) | passed as `model=`; baseline does `os.environ["OPENAI_MODEL"]` (KeyError if missing) — we treat a missing value as "LLM disabled" instead of crashing |
+| `OPENAI_API_KEY` | key for the organizers' LLM proxy, set by the platform | read implicitly by `openai.OpenAI()`; never logged; a missing key disables the LLM |
+| `OPENAI_BASE_URL` | the organizers' OpenAI-compatible proxy, set by the platform; writing our own address or key into the code is forbidden | read implicitly by `openai.OpenAI()`; the **only** network destination we ever contact; a missing value disables the LLM (the SDK would otherwise default to api.openai.com) |
+| `OPENAI_MODEL` | model name; optional: "the proxy substitutes the task's model" | passed as `model=`; when unset we send the documented `qwen/qwen3.8-27b` (the baseline would raise a KeyError) |
 
 No other platform variables exist. Our own dev-only overrides use the `AGENT_` prefix
 (e.g. `AGENT_TIME_BUDGET`, `AGENT_LLM_MODE=mock|off|real`, `AGENT_RUN_DIR`) and all
@@ -97,8 +101,11 @@ Agent rules derived from this:
   limits (cgroup / psutil) at start-up.
 - 3 h wall clock per task, counted from process start; killed afterwards (PDF p.7, p.17).
 - No internet from the container; no pretrained models; train only on the task data.
-- LLM: only Qwen3.8-27B via the organizers' API (env vars above). Team budget about
-  600 RUB/day → per-run caps on calls and tokens.
+- LLM: only Qwen3.8-27B via the organizers' API (env vars above). 600 RUB/day per key,
+  shared by everyone using it; once spent, the proxy answers "Budget has been exceeded"
+  until 03:00 MSK → per-run caps on calls and tokens, and the client disables itself on
+  that error (key instructions).
+- ZIP up to 100 MB (key instructions; ours is under 100 KB).
 - Each task runs in isolation; nothing persists between tasks; no feedback from the
   hidden test.
 - 3 submissions per team per day (reset 00:00 MSK).
@@ -108,9 +115,13 @@ Agent rules derived from this:
 - OpenAI-compatible Chat Completions (`client.chat.completions.create`). The baseline
   uses tool calling with `parallel_tool_calls=False`; we use plain chat completions with
   a JSON-only reply and strict validation, which every OpenAI-compatible server supports.
-- Qwen3 models may emit `<think>…</think>` reasoning; the client strips it and asks for
-  non-thinking mode. Anything server-specific (e.g. `chat_template_kwargs`) is tried once
-  and dropped on error.
+- Measured on the organizers' proxy (2026-10-22, model `qwen/qwen3.8-27b`): thinking is
+  on by default and its text arrives in a separate `reasoning_content` field; `/no_think`
+  and `chat_template_kwargs` are ignored; `reasoning_effort: "none"` switches it off
+  (0 reasoning tokens, about 2× faster). The client sends `reasoning_effort` together
+  with `chat_template_kwargs` (for a bare vLLM server), drops `reasoning_effort` on an
+  HTTP 400, then both. A reply whose reasoning hit `max_tokens` is never parsed as the
+  answer (one retry with a 3× budget); `<think>…</think>` in the content is stripped.
 
 ## 8. Libraries
 

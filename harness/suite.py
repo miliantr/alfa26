@@ -267,8 +267,8 @@ TASKS = {
 
 # -------------------------------------------------------------------------- runner
 def _score(md: Path, labels: pd.DataFrame, labels_path: Path) -> dict:
-    from agent.submission import SubmissionTemplate, check_file
-    from agent.task_parser import parse_task
+    from agent_submission import SubmissionTemplate, check_file
+    from agent_task_parser import parse_task
     from harness.scoring import score_submission
 
     spec = parse_task(md)
@@ -276,7 +276,7 @@ def _score(md: Path, labels: pd.DataFrame, labels_path: Path) -> dict:
     if not out.exists():
         return {"valid": False, "errors": ["missing"], "spec": spec.summary()}
     if len(spec.target_cols) > 1:
-        from agent.task_parser import sub_spec
+        from agent_task_parser import sub_spec
 
         sub = pd.read_csv(out, dtype={spec.id_col: str})
         lab = pd.read_csv(labels_path, dtype={spec.id_col: str})

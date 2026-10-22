@@ -12,8 +12,8 @@ import time
 import numpy as np
 import pandas as pd
 
-from . import log
-from .features import cat_columns, num_columns
+import agent_log as log
+from agent_features import cat_columns, num_columns
 
 L = log.get("models")
 

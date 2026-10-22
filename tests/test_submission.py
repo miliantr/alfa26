@@ -4,8 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from agent import submission, task_parser
-from agent.io_utils import read_csv
+import agent_submission as submission
+import agent_task_parser as task_parser
+from agent_io_utils import read_csv
 
 
 def _tpl(md):
@@ -99,7 +100,7 @@ def test_labels_written_as_ints(tmp_path):
 
 
 def test_emergency_writes_when_nothing_exists(reg_task):
-    from agent.emergency import ensure_submission
+    from agent_emergency import ensure_submission
 
     out = reg_task.parent / "submission.csv"
     assert not out.exists()

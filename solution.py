@@ -31,19 +31,19 @@ def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     task = _task_path(sys.argv).resolve()
     try:
-        from agent.runner import run
+        from agent_runner import run
 
         run(task)
     except BaseException as exc:  # noqa: BLE001 - nothing may escape without a submission
         try:
-            from agent.emergency import ensure_submission
+            from agent_emergency import ensure_submission
 
             ensure_submission(task, reason=repr(exc))
         except BaseException:
             pass
     else:
         try:
-            from agent.emergency import ensure_submission
+            from agent_emergency import ensure_submission
 
             ensure_submission(task, reason="post-run check")
         except BaseException:

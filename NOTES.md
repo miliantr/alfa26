@@ -164,4 +164,73 @@ data (network none, 8 CPUs) ✅ (peak RSS 0.81 GB).
 - **Prompt size**: research prompts were ~11k characters (~4-5k tokens: every column with
   its Russian description). Now full detail for the 20 most important columns only:
   ~6.8k characters, ~2.8k tokens per call, ~85k tokens per task at the 30-call cap.
-- Still open: one live run against the organizers' Qwen endpoint.
+
+## Organizers' key instructions and the live Qwen proxy (2026-10-22/23)
+
+The API-key email links "AutoML_Инструкция по ключам" (see CONTRACT.md). Three findings
+would each have cost points on the platform; v0.1 and v0.2 must not be submitted.
+
+- **ZIP layout (would have scored 0):** "only the root-level `.py` files and
+  `requirements.txt` are copied" into the task directory. Our code lived in an `agent/`
+  package, which the platform would have dropped. The agent is now flat (`agent_*.py`,
+  absolute imports, worker started as `python -m agent_worker`); `harness/ship.py`
+  defines the ZIP, `make_submission.sh` refuses subfolders, relative imports and
+  `agent_*` imports that are not shipped, and adds the Drive-folder `requirements.txt`
+  (the variant in `problem/`, the one the instructions' `langchain-openai` mention
+  matches). The Docker rehearsal now uses the platform layout: root files copied into
+  the task directory, `python3 solution.py task.md` started there.
+- **`OPENAI_MODEL` is optional** ("the proxy substitutes the task's model"). Both the
+  settings and the client used to switch the LLM off without it. Now the key and the base
+  URL decide; the model defaults to the documented `qwen/qwen3.8-27b` (verified live with
+  the variable unset). A missing base URL still disables the LLM, so the SDK never falls
+  back to api.openai.com.
+- **Thinking mode:** the proxy returns Qwen's reasoning in `reasoning_content` and
+  ignores `/no_think` and `chat_template_kwargs`. The first live task-parse call spent its
+  800 tokens reasoning; the client then took that text as the answer, pulled `["mae"]` out
+  of it and failed validation (18.5 s). `reasoning_effort: "none"` gives 0 reasoning
+  tokens: the same call now takes 2.9 s / 183 tokens and returns the correct spec.
+  Fallback order on HTTP 400: `reasoning_effort` + `chat_template_kwargs` ->
+  `chat_template_kwargs` (bare vLLM) -> nothing. A reply cut off while reasoning is never
+  parsed (one retry with a 3x budget); "Budget has been exceeded" disables the client at once.
+- **Live end-to-end runs** (15 min, holdout, real proxy):
+  - task 2: exit 0, 832 s, peak 0.89 GB, macro-F1 0.6328. One LLM call (task parse,
+    8.4 s, correct metric): at this budget the model zoo fills the window (CatBoost
+    alone 424 s), research started with 34 s left.
+  - task 1 (run 1): exit 0, 817 s, test-like RMSE 34.24; 6 calls, 14.3k + 4.5k tokens;
+    12 Qwen hypotheses evaluated, 1 accepted (drop 3 weak columns, 3/4 folds), 9 rejected
+    by the paired rule, 1 skipped for time. Hypothesis calls take 19-27 s (~55 tokens/s).
+    Two issues fixed after it: the first reply hit `max_tokens=1500` mid-code, JSON
+    repair kept the broken third hypothesis and the sandbox rejected it (now 2500 tokens,
+    one-sentence rationales, and the last hypothesis of a cut-off reply is dropped); one
+    call hit a 45 s timeout late in the window (now at least 60 s while time allows; in a
+    3-hour run it is 120 s anyway).
+  - task 1 (run 2, after those fixes): hypothesis calls 2-6 s and 250-440 tokens, no
+    cut-offs or timeouts, 3 changes kept on CV (4/4, 4/4, 3/4 folds) - yet test-like
+    RMSE 36.92: research made the holdout worse (zoo 34.56 -> research 36.61).
+- **Why research hurt in run 2: stateful recipes were fitted on the whole train.**
+  Scoring every experiment's own test predictions on the holdout: the kept `group_stats`
+  feature (deviations of floor area and heating/cooling degree days from facility-type
+  and building-class means) moved CV 44.16 -> 42.86 but the future period 34.52 -> 40.21;
+  everything built on it inherited that. Recipe statistics (`group_stats`,
+  `freq_encoding`, `make_key` counts) were computed once on all training rows, so in
+  leave-one-period-out CV each validation period shaped its own features; the test's rows
+  never shape theirs. Rebuilt offline with the same xgb: no feature CV 45.45 / holdout
+  34.61; full-train fit 44.11 / 38.90; train+test (transductive) fit 43.88 / 41.79, so
+  that is no fix; refitted inside each fold 45.07 / 37.00, with fold deltas
+  [+0.54, +1.44, -2.05, +1.62], which the paired rule rejects (mean 0.39 < 0.5 SE = 0.42).
+  Fix: `build_features` records each stateful recipe's resolved arguments, and the worker
+  refits those columns inside every fold on the fold's training rows (validation rows and
+  the fold model's test rows get the fold-train statistics), as target encoding already
+  was. Run 1's kept change (a drop) was unaffected, which is why it did not hurt.
+- task 1 (run 3, with fold refits): exit 0, 848 s, peak 0.74 GB; 5 calls (4-8 s each,
+  14.5k + 2.0k tokens, no failures). Qwen proposed the same `group_stats` feature again:
+  now 2/4 folds, rejected. Kept: frequency encoding (refitted per fold) and a drop of 4
+  weak columns (4/4). Test-like RMSE: zoo 34.56 -> final 34.78, i.e. research is about
+  neutral here (run 2: 36.92). The frequency feature still looks better on CV
+  (44.16 -> 43.57) than on the single holdout period (34.52 -> 35.50); with one future
+  period that gap is within noise, and the 60-minute mock rehearsal saw research improve
+  the same holdout (34.56 -> 33.25).
+- A model hypothesis is now compared with the champion when the best same-family run on
+  the same features is weaker: in run 2 a log1p LightGBM was "kept" for beating a failed
+  tuning trial (49.14) although it was worse than the plain LightGBM on 3 of 4 folds. That
+  only affected the journal the Researcher sees: the blend picks members by OOF anyway.

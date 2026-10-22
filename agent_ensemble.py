@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import metrics, postprocess
+import agent_metrics as metrics
+import agent_postprocess as postprocess
 
 _BALANCED = ("f1_macro", "balanced_accuracy", "recall_macro", "precision_macro", "mcc", "kappa", "qwk")
 

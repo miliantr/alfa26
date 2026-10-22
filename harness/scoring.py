@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from agent import metrics
-from agent.task_parser import TaskSpec
+import agent_metrics as metrics
+from agent_task_parser import TaskSpec
 
 
 def score_submission(sub_path: Path, labels_path: Path, spec: TaskSpec, ids: set | None = None) -> dict:

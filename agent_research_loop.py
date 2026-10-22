@@ -22,11 +22,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import features, log, metrics, postprocess
-from .io_utils import append_jsonl, dumps, write_json
-from .llm_client import LLMClient
-from .models import FAMILIES
-from .sandbox import run_feature_code
+import agent_features as features
+import agent_log as log
+import agent_metrics as metrics
+import agent_postprocess as postprocess
+from agent_io_utils import append_jsonl, dumps, write_json
+from agent_llm_client import LLMClient
+from agent_models import FAMILIES
+from agent_sandbox import run_feature_code
 
 L = log.get("research")
 
@@ -179,6 +182,7 @@ Hypothesis forms (pick fields per action):
    "class_weight":null|"balanced"|"sqrt","objective":"l2|l1|huber|mape","target_transform":"none|log1p|sqrt","rationale":"..."}
 - {"action":"tune","family":"lgbm|xgb|catboost","rationale":"..."}  — one Bayesian-optimisation trial
 Optional on any hypothesis: "expected_gain":"tiny|small|medium|large", "cost":"low|medium|high".
+Be brief: each rationale one sentence (under 25 words), custom code under 25 lines.
 """
 
 
@@ -356,12 +360,17 @@ class ResearchLoop:
     def _ask_llm(self) -> list[dict]:
         if not self.llm or not self.llm.available(reserve_tokens=6000):
             return []
-        timeout = max(20.0, min(self.settings.llm_timeout, self.deadline.research_remaining() * 0.15))
+        # Live Qwen answers 1-2k tokens in 20-45 s; a short timeout late in the window would
+        # cut off a healthy server (and two timeouts disable the client).
+        remaining = self.deadline.research_remaining()
+        timeout = min(self.settings.llm_timeout, max(60.0, remaining * 0.15), max(20.0, remaining * 0.5))
         resp = self.llm.chat_json(SYSTEM_PROMPT, "STATE:\n" + self._state() + "\nPropose up to 3 hypotheses.",
-                                  schema=HYP_SCHEMA, max_tokens=1500, purpose="hypotheses", timeout=timeout)
+                                  schema=HYP_SCHEMA, max_tokens=2500, purpose="hypotheses", timeout=timeout)
         if not resp:
             return []
         hyps = [h for h in resp.get("hypotheses", []) if isinstance(h, dict) and h.get("action") in ACTIONS]
+        if self.llm.last_truncated:
+            hyps = hyps[:-1]  # the reply hit max_tokens: its last hypothesis is cut off
         for h in hyps:
             h["source"] = "llm"
         return hyps[:3]
@@ -508,6 +517,8 @@ class ResearchLoop:
         else:
             same = [e for e in self.pipe.ok if e.model["family"] == fam and e.feature_ops == exp.feature_ops and e is not exp]
             ref = max(same, key=lambda e: self.m.sign() * e.score) if same else self.champ
+            if self.champ is not None and self.m.better(self.champ.score, ref.score):
+                ref = self.champ  # a weak same-family run (e.g. a failed tuning trial) is no reference
         cmp = self.pipe.compare(exp, ref) if ref is not None else {"delta": 0.0, "significant": True}
         accepted = bool(cmp["significant"])
         rec.update(score=round(exp.score, 6), ref=ref.id if ref else None, delta=cmp["delta"], accepted=accepted,

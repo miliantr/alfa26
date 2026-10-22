@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from sklearn import metrics as skm
 
-from agent import metrics as M
+import agent_metrics as M
 
 rng = np.random.default_rng(0)
 Y_REG = rng.normal(10, 3, 200).clip(0.1)

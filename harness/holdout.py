@@ -15,8 +15,8 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from agent.io_utils import read_csv
-from agent.task_parser import parse_task
+from agent_io_utils import read_csv
+from agent_task_parser import parse_task
 
 
 def detect_time_column(train: pd.DataFrame, test: pd.DataFrame, exclude: set[str]) -> str | None:

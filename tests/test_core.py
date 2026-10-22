@@ -3,7 +3,10 @@ import pandas as pd
 import pytest
 from sklearn import metrics as skm
 
-from agent import ensemble, features, postprocess, profiler
+import agent_ensemble as ensemble
+import agent_features as features
+import agent_postprocess as postprocess
+import agent_profiler as profiler
 
 rng = np.random.default_rng(0)
 
@@ -87,6 +90,51 @@ def test_recipes_keep_rows_and_columns_aligned(op):
     assert len(A) == len(tr) and len(B) == len(te)
     assert list(A.columns) == list(B.columns)
     assert not info["errors"], info["errors"]
+
+
+def test_stateful_recipes_are_refitted_inside_folds():
+    """A validation fold's own rows must not shape its features: the test's rows never
+    shape theirs (live task 1: such a feature won 4/4 folds and hurt the next period)."""
+    tr, te = _frames()
+    ops = [{"op": "group_stats", "args": {"cats": ["c"], "nums": ["b"]}}, {"op": "freq_encoding"},
+           {"op": "make_key", "args": {"cols": ["c"]}}]
+    A, B, info = features.build_features(tr, te, ops, {})
+    assert features.has_refit(info) and not info["errors"]
+    fit, val = np.arange(100), np.arange(100, 150)
+    fa, fb, fc = features.refit_in_fold(A, B, info, fit, val, {})
+    assert (len(fa), len(fb), len(fc)) == (100, 50, len(te)) and list(fa.columns) == list(A.columns)
+    key_fit = tr["c"].iloc[:100].astype(str)
+    mu = tr["b"].iloc[:100].groupby(key_fit).mean()
+    np.testing.assert_allclose(fb["b__dev_by__c"], tr["b"].iloc[100:].to_numpy() - tr["c"].iloc[100:].astype(str).map(mu),
+                               rtol=1e-5)
+    np.testing.assert_allclose(fc["b__dev_by__c"], te["b"].to_numpy() - te["c"].astype(str).map(mu), rtol=1e-5)
+    assert not np.allclose(fb["b__dev_by__c"], A["b__dev_by__c"].iloc[100:])  # full-train fit differs
+    np.testing.assert_allclose(fb["c__freq"], tr["c"].iloc[100:].astype(str).map(key_fit.value_counts(normalize=True)),
+                               rtol=1e-5)
+    np.testing.assert_allclose(fa["key__c__count"], key_fit.map(key_fit.value_counts()), rtol=1e-6)
+    assert isinstance(fa["key__c"].dtype, pd.CategoricalDtype) and (fa["key__c"] == A["key__c"].iloc[:100].to_numpy()).all()
+
+
+def test_worker_refits_stateful_recipes_in_every_fold(tmp_path, monkeypatch):
+    import agent_worker as worker
+
+    tr, te = _frames()
+    tr["a"] = tr["a"].fillna(0)
+    y = (2 * tr["b"] + (tr["c"] == "x") + rng.normal(scale=0.1, size=len(tr))).to_numpy()
+    folds = np.arange(len(tr)) % 3
+    pd.to_pickle({"Xtr": tr, "Xte": te, "y": y, "folds": folds, "eval_mask": None, "folds_rep": None,
+                  "meta": {"task_type": "regression", "n_classes": 0, "metric": "rmse",
+                           "y_range": [float(y.min()), float(y.max())]}}, tmp_path / "base.pkl")
+    calls = []
+    real = features.refit_in_fold
+    monkeypatch.setattr(features, "refit_in_fold", lambda *a, **k: calls.append(1) or real(*a, **k))
+    job = {"base_path": str(tmp_path / "base.pkl"), "fs_cache_dir": str(tmp_path / "fs"), "out_dir": str(tmp_path),
+           "feature_ops": [{"op": "group_stats", "args": {"cats": ["c"], "nums": ["b", "a"]}}],
+           "model": {"family": "lgbm", "objective": "l2", "target_transform": "none"}, "metric": "rmse",
+           "seed": 1, "n_jobs": 2, "time_limit": 60}
+    res = worker.run(job)
+    assert res["status"] == "ok" and len(calls) == 3 and np.isfinite(res["score"])
+    assert np.isfinite(np.load(tmp_path / "oof.npy")).all() and np.load(tmp_path / "test.npy").shape == (len(te),)
 
 
 def test_broken_recipe_is_skipped():

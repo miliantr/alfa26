@@ -17,7 +17,7 @@ The platform contract (launch interface, env vars, paths, output format) is in
 solution.py ── top-level guard ──────────────────────────────────────────────┐
    │                                                                         │ any exception
    ▼                                                                         ▼
-agent/runner.py                                                     agent/emergency.py
+agent_runner.py                                                     agent_emergency.py
    │ 0. parse task (task_parser) ─► constant submission (seconds)    (template constant, or
    │ 0b. LLM reads the Russian description -> JSON spec,              stdlib copy of sample)
    │     cross-checked with heuristics (heuristics win)
@@ -28,15 +28,20 @@ agent/runner.py                                                     agent/emerge
    │ 4. AutoResearch loop (research_loop) ─► blend ─► submission after every gain
    │ 5. final assembly: seed bagging of the best model, re-blend, post-process
    ▼
-agent/pipeline.py ── experiment pool, cost model, paired comparisons, journal
+agent_pipeline.py ── experiment pool, cost model, paired comparisons, journal
    │                        │
    │ job.json               │ OOF + test predictions (shared folds)
    ▼                        ▼
-agent/executor.py ─► python -m agent.worker  (subprocess: hard timeout + RSS guard)
-                         features.py (cached feature sets) · models.py · postprocess.py
+agent_executor.py ─► python -m agent_worker  (subprocess: hard timeout + RSS guard)
+                agent_features.py (cached feature sets) · agent_models.py · agent_postprocess.py
 ```
 
-| Module | Role |
+The code is flat on purpose: the platform copies only the ZIP's root-level `.py` files
+and `requirements.txt` into the task directory, so every module is a root-level
+`agent_<name>.py` (`harness/ship.py` defines what ships; `make_submission.sh` refuses a
+ZIP with subfolders or with an `agent_*` import that is not in it).
+
+| Module (`agent_<name>.py`) | Role |
 |---|---|
 | `task_parser` | locate files from `task.md` (recursive fallback), id/target, task type, primary metric (Russian/English patterns, code snippets), output kind (`value` / `label` / `proba` / `proba_wide`), multi-target sub-specs, LLM cross-check |
 | `metrics` | 25 metrics with direction, prediction kind and objective hint; unknown-metric fallback per task type; the case's normalized-score formula |
@@ -85,12 +90,15 @@ Every hypothesis and experiment is journaled (`journal.jsonl`, `research_journal
   is logged and skipped.
 - Threads from the cgroup CPU quota (not the host core count); memory limit from cgroups.
 - Leakage: id-like columns dropped, near-perfect single-feature predictors flagged, target
-  encoding strictly out-of-fold, decision rules fitted on OOF only, no test labels, no test
-  set for selection. Test features are used only for category vocabularies (documented).
+  encoding strictly out-of-fold, statistics-based recipes (group stats, frequencies, key
+  counts) refitted inside every fold, decision rules fitted on OOF only, no test labels,
+  no test set for selection. Test features are used only for category vocabularies
+  (documented).
 - Validation mimics the test: time-split detection → leave-period-out folds; eval mask for
   categories that a fold sees as new but the real test does not.
 - LLM: only `OPENAI_BASE_URL`, per-run caps (30 calls, 160k tokens by default), heuristics
-  win over the LLM on task facts.
+  win over the LLM on task facts. Thinking is switched off per request
+  (`reasoning_effort: "none"` on the organizers' proxy); `OPENAI_MODEL` is optional.
 
 ## Running locally
 
@@ -106,9 +114,10 @@ python -m harness.suite --budget 240                          # generalization s
 `--holdout` carves a scorable holdout out of `train.csv` (last period for time-split
 tasks), runs the agent exactly like the platform (task path argument, cwd outside the
 task dir, hard kill at the budget) and scores it against linear and random-forest
-baseline proxies. `--docker` runs the same inside the offline replica
-(`docker/Dockerfile`: Python 3.12 + the organizers' requirements, `--network none`,
-`--cpus 8`, non-root, read-only code dir).
+baseline proxies. `--docker` runs it inside the offline replica in the platform's
+layout (`docker/Dockerfile`: Python 3.12 + the organizers' requirements, `--network
+none`, `--cpus 8`, non-root; only the ZIP's root files are copied into the task
+directory and started there as `python3 solution.py task.md`).
 
 Environment overrides (all optional, platform runs set none): `AGENT_TIME_BUDGET`,
 `AGENT_LLM_MODE=real|mock|off`, `AGENT_LLM_MOCK=good|garbage|error|slow|mixed`,

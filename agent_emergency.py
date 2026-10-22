@@ -51,9 +51,9 @@ def ensure_submission(task_md: Path, reason: str = "") -> None:
     sys.stderr.write(f"[emergency] checking submission ({reason[:300]})\n")
     # 1) Template-based constant prediction (validated).
     try:
-        from .io_utils import read_csv
-        from .submission import SubmissionTemplate
-        from .task_parser import parse_task
+        from agent_io_utils import read_csv
+        from agent_submission import SubmissionTemplate
+        from agent_task_parser import parse_task
 
         spec = parse_task(task_md)
         outs = [Path(p) for p in spec.output_paths] or [default_out]

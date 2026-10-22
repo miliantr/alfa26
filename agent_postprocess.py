@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import metrics
+import agent_metrics as metrics
 
 _FAST_LABEL = ("f1_macro", "f1_weighted", "f1_micro", "accuracy", "balanced_accuracy",
                "precision_macro", "recall_macro", "f1")

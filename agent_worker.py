@@ -1,6 +1,6 @@
 """Experiment worker: one cross-validated model run in an isolated subprocess.
 
-    python -m agent.worker <job.json>
+    python -m agent_worker <job.json>
 
 Reads the shared base data, builds the requested feature set (cached), trains one model
 per fold with early stopping, and writes ``oof.npy``, ``test.npy`` and ``result.json``
@@ -89,7 +89,10 @@ def _inverse_target(p, mode, shift):
 
 
 def run(job: dict) -> dict:
-    from agent import features, metrics, models, postprocess
+    import agent_features as features
+    import agent_metrics as metrics
+    import agent_models as models
+    import agent_postprocess as postprocess
 
     t_start = time.time()
     out_dir = Path(job["out_dir"])
@@ -102,6 +105,9 @@ def run(job: dict) -> dict:
     if job.get("drop_cols"):
         dc = [c for c in job["drop_cols"] if c in Xtr.columns]
         Xtr, Xte = Xtr.drop(columns=dc), Xte.drop(columns=dc)
+    # Stateful recipes are refitted inside every fold (from the frames with their
+    # original column names); the full-train build is what the test sees.
+    refit = (Xtr, Xte) if features.has_refit(fs_info) else None
     (Xtr, Xte), mapping = _safe_columns([Xtr, Xte])
     inv_map = {v: k_ for k_, v in mapping.items()}
     model = job["model"]
@@ -135,7 +141,11 @@ def run(job: dict) -> dict:
             raise TimeoutError(f"not enough time for fold {i}: {left:.0f}s left")
         tr = np.where(fr != f)[0]
         va = np.where(fr == f)[0]
-        A, B, C = Xtr.iloc[tr], Xtr.iloc[va], Xte
+        if refit is not None:
+            A, B, C = (df.rename(columns=mapping)
+                       for df in features.refit_in_fold(refit[0], refit[1], fs_info, tr, va, ctx))
+        else:
+            A, B, C = Xtr.iloc[tr], Xtr.iloc[va], Xte
         if te_cols:
             A, (B, C) = _target_encode(A, y_fit[tr], [B, C], te_cols, task, k, seed)
         t0 = time.time()
@@ -197,7 +207,7 @@ def main() -> None:
         res = run(job)
     except BaseException as e:  # noqa: BLE001
         res = {"status": "error", "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()[-4000:]}
-    from agent.io_utils import write_json
+    from agent_io_utils import write_json
 
     write_json(out_dir / "result.json", res)
 

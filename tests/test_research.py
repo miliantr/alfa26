@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from agent import profiler
-from agent.research_loop import ResearchLoop, Tuner, clamp_params
+import agent_profiler as profiler
+from agent_research_loop import ResearchLoop, Tuner, clamp_params
 
 
 def test_clamp_params_whitelist_and_ranges():

@@ -1,8 +1,9 @@
 # Replica of the platform runtime: CPython 3.12 + the organizers' requirements, CPU only.
-# Run it with the network disabled and the platform limits, e.g.
-#   docker run --rm --network none --cpus=8 --memory=32g \
-#     -v "$PWD/dist/solution:/solution:ro" -v "$PWD/runs/x/task:/task" \
-#     alfa-automl-platform:py312 timeout 10800 python /solution/solution.py /task/task.md
+# Run it with the network disabled and the platform limits, in the platform's layout
+# (the ZIP's root files copied into the task directory), e.g.
+#   docker run --rm --network none --cpus=8 --memory=32g -v "$PWD/runs/x/task:/task" -w /task \
+#     alfa-automl-platform:py312 timeout 10800 python3 solution.py task.md
+# run_local.py --docker does this with docker create + cp (no bind mounts).
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
