@@ -105,7 +105,7 @@ class Pipeline:
     def run(self, name: str, model: dict, *, feature_ops: list | None = None, drop_cols: list | None = None,
             source: str = "zoo", hypothesis: str = "", timeout: float | None = None,
             parent: str | None = None, seed: int | None = None, phase: str = "research",
-            timeout_factor: float = 3.0) -> Experiment:
+            timeout_factor: float = 3.0, max_share: float | None = None) -> Experiment:
         self._n += 1
         ops = self.base_ops if feature_ops is None else feature_ops
         exp = Experiment(id=f"e{self._n:03d}", name=name, source=source, model=model, feature_ops=ops,
@@ -116,6 +116,10 @@ class Pipeline:
             if model["family"] not in self.timings:
                 timeout_factor = max(timeout_factor, 5.0)  # first run of a family: estimate is a guess
             timeout = self.deadline.job_timeout(est, factor=timeout_factor, phase=phase, minimum=30.0)
+            if max_share is not None:
+                # One research job may not swallow the window: at most max_share of what is
+                # left (but never less than 1.5x its own estimate).
+                timeout = min(timeout, max(est * 1.5, max_share * self.deadline.research_remaining()))
         if timeout < 10:
             exp.status, exp.error = "skipped", "no time left"
             self._log(exp)

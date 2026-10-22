@@ -59,3 +59,21 @@ def test_deterministic_queue_is_task_aware():
     assert ("feature_engineering", "missing_count") in actions  # x has missing values
     assert any(h.get("target_transform") == "sqrt" for h in q)  # skewed non-negative target
     assert sum(1 for a, _ in actions if a == "tune") >= 3
+
+
+def test_expensive_family_without_blend_weight_is_skipped():
+    from types import SimpleNamespace as NS
+
+    lgb = NS(id="e1", model={"family": "lgbm"})
+    cat = NS(id="e2", model={"family": "catboost"})
+    est = {"lgbm": 60.0, "catboost": 1000.0, "xgb": 120.0}
+    pipe = NS(sub_desc={"members": ["e1", "e2"], "weights": [1.0, 0.0]}, ok=[lgb, cat],
+              estimate_seconds=lambda fam, n=None: est[fam])
+    loop = ResearchLoop.__new__(ResearchLoop)
+    loop.pipe, loop.champ = pipe, lgb
+    loop.deadline = NS(research_remaining=lambda: 3000.0)
+    assert loop._worth_it("lgbm")            # champion family
+    assert not loop._worth_it("catboost")    # no weight, 1000 s > 10% of 3000 s
+    assert loop._worth_it("xgb")             # cheap enough to try
+    pipe.sub_desc = {"members": ["e1", "e2"], "weights": [0.5, 0.5]}
+    assert loop._worth_it("catboost")        # carries blend weight now

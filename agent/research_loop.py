@@ -424,6 +424,8 @@ class ResearchLoop:
             fam = h.get("family") or base_model["family"]
             if fam not in FAMILIES:
                 return None, f"unknown family {fam}"
+            if not self._worth_it(fam):
+                return None, f"{fam} carries no blend weight and costs >10% of the research time left"
             ref = self.pipe.best(family=fam)
             model = copy.deepcopy(ref.model) if ref is not None and ref.feature_ops == ops else {"family": fam}
             if fam == base_model["family"]:
@@ -452,6 +454,18 @@ class ResearchLoop:
             model["family"] = fam
             return {"model": model, "feature_ops": ops, "drop_cols": drop}, ""
         return None, f"unsupported action {action}"
+
+    def _worth_it(self, fam: str) -> bool:
+        """Spend research time on a model family only if it matters for the blend or is
+        cheap: on task 2 a CatBoost tuning trial (no blend weight, ~18 min per run) would
+        otherwise take a large share of the window."""
+        if self.champ is not None and fam == self.champ.model["family"]:
+            return True
+        desc = self.pipe.sub_desc or {}
+        weights = dict(zip(desc.get("members", []), desc.get("weights", [])))
+        in_blend = any(e.model["family"] == fam and weights.get(e.id, 0) > 0 for e in self.pipe.ok)
+        est = self.pipe.estimate_seconds(fam)
+        return in_blend or est <= 0.10 * max(1.0, self.deadline.research_remaining())
 
     def _code_feature(self, h, base_model, ops, drop):
         if self.raw_frames is None:
@@ -581,7 +595,8 @@ class ResearchLoop:
                                 hypothesis=self._summary(h),
                                 # new hyper-parameters (lower learning rate, bigger trees) can
                                 # cost several times the reference run
-                                timeout_factor=5.0 if h["action"] in ("tune", "model") else 3.0)
+                                timeout_factor=5.0 if h["action"] in ("tune", "model") else 3.0,
+                                max_share=0.25)
             rec = self._judge(h, exp)
             self._record(rec, h)
             if exp.status == "ok":
