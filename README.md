@@ -182,17 +182,21 @@ Tiny datasets are the known weak spot: on a few hundred rows the agent ties or t
 plain linear model. The tiny-task rows are from the re-run after cross-fitted decision
 rules and repeated CV were added.
 
-### Submission checklist (commit `cd77a4e`, `python -m harness.checklist`)
+### Submission checklist (commit `ade4c90`, `python -m harness.checklist`)
 
 | Check | Result |
 | --- | --- |
 | Imports ⊆ intersection of both requirements files | pass (`tests/test_imports.py`) |
 | No network libraries outside `agent/llm_client.py` | pass |
 | ZIP root contains `solution.py` | pass (23 files, no pyproject/uv.lock) |
-| ZIP unzipped into a clean folder and run in the offline Docker image | pass (exit 0, 210 s, valid file) |
-| Valid submission with the LLM unreachable | pass (180 s) |
+| ZIP unzipped into a clean folder and run in the offline Docker image | pass (exit 0, 238 s, valid file) |
+| Valid submission with the LLM unreachable (connection refused) | pass (185 s) |
+| Valid submission with an LLM endpoint that hangs | pass (client gives up after 2 timeouts; quick model at 74 s) |
+| Real OpenAI-SDK path against a local OpenAI-compatible server | pass (unit test + 15-min agent run in real mode) |
 | Valid submission after hard kills at 459 s and 636 s | pass |
-| Offline Docker run on the real task-2 data (`--network none`, 8 CPUs) | pass (peak RSS 0.71 GB) |
+| Offline Docker run on the real task-2 data (`--network none`, 8 CPUs) | pass (peak RSS 0.69 GB) |
 | Peak RAM < 28 GB | pass (1.13 GB max in the rehearsals) |
 | Finishes or saves within the budget | pass (57 of 60 min end to end; 3-hour runs interrupted by the host left valid files) |
-| Unit tests | 110 passed |
+| Unit tests | 112 passed |
+
+Not verified yet: a live run against the organizers' Qwen endpoint (no credentials).

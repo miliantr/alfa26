@@ -147,3 +147,21 @@ data (network none, 8 CPUs) ✅ (peak RSS 0.81 GB).
   below reality on these tasks (9x on task 1, 16x on 10-class task 2: 18 min per run on 6
   threads for macro-F1 0.596). It runs last in the zoo, so it only costs research time
   (~8% of the 3-hour window on task 2), never the floor.
+
+## LLM path hardening (after v0.1)
+
+- **Hanging endpoint** (accepts connections, never answers) is a more likely failure in a
+  locked-down container than a refused connection. Before: every request retried 3x with
+  backoff, three failed calls needed to disable the client, the start-up parse call had a
+  90 s timeout -> ~17 min of research lost and the first real model delayed ~4.6 min.
+  Now: timeouts are not retried, two timeouts disable the client, the parse call has 45 s
+  -> ~165 s lost; quick model on disk at 74 s in an end-to-end run (task 2).
+- **Real OpenAI-SDK path tested without credentials** against a local OpenAI-compatible
+  stub: think-block stripping, fenced JSON, HTTP 400 on `chat_template_kwargs` -> retry
+  without it, `/no_think` suffix, usage accounting (unit test), plus a 15-minute agent run in
+  real mode on task 1 (task spec merged, sandboxed feature code executed, a recipe and a
+  parameter change accepted, the bogus parameter dropped, garbage replies tolerated).
+- **Prompt size**: research prompts were ~11k characters (~4-5k tokens: every column with
+  its Russian description). Now full detail for the 20 most important columns only:
+  ~6.8k characters, ~2.8k tokens per call, ~85k tokens per task at the 30-call cap.
+- Still open: one live run against the organizers' Qwen endpoint.
