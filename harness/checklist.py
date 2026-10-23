@@ -29,6 +29,19 @@ REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 
 
+def _bash() -> str:
+    """Git for Windows' bash launcher. A bare "bash" can resolve to the WSL launcher
+    (System32 or WindowsApps), and Git's usr/bin/bash has no git on PATH outside a Git
+    Bash session; bin/bash.exe sets the environment up itself."""
+    if os.name == "nt":
+        roots = [Path(p).resolve().parents[1] for p in filter(None, [shutil.which("git")])]
+        roots += [Path(os.environ[v]) / "Git" for v in ("ProgramFiles", "ProgramW6432") if os.environ.get(v)]
+        for root in roots:
+            if (root / "bin" / "bash.exe").exists():
+                return str(root / "bin" / "bash.exe")
+    return shutil.which("bash") or "bash"
+
+
 def _run_local(args: list[str], env_extra: dict | None = None) -> dict:
     out = REPO / "runs" / f"checklist_{abs(hash(tuple(args))) % 10 ** 8}"
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", **(env_extra or {})}
@@ -54,9 +67,7 @@ def main() -> int:
     results["1_imports_within_requirements"] = r.returncode == 0
     results["2a_no_network_libs_outside_llm_client"] = "passed" in r.stdout and r.returncode == 0
 
-    # On Windows a bare "bash" resolves to System32's WSL launcher before PATH; use PATH's.
-    bash = shutil.which("bash") or "bash"
-    sh = subprocess.run([bash, str(REPO / "make_submission.sh")], cwd=str(REPO), capture_output=True, text=True)
+    sh = subprocess.run([_bash(), str(REPO / "make_submission.sh")], cwd=str(REPO), capture_output=True, text=True)
     zips = sorted((REPO / "dist").glob("submission_*.zip"), key=lambda p: p.stat().st_mtime)
     if sh.returncode == 0 and zips:
         names = zipfile.ZipFile(zips[-1]).namelist()

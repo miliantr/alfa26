@@ -16,7 +16,7 @@ if [ -x .venv/Scripts/python.exe ]; then PY=.venv/Scripts/python.exe; fi
 if [ -x .venv/bin/python ]; then PY=.venv/bin/python; fi
 
 SHA="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
-DIRTY="$(git status --porcelain -- solution.py "agent_*.py" requirements_drive_folder.txt 2>/dev/null | head -1)"
+DIRTY="$(git status --porcelain -- solution.py "agent_*.py" requirements_drive_folder.txt 2>/dev/null | head -1 || true)"
 [ -n "$DIRTY" ] && SHA="${SHA}-dirty"
 OUT="dist/submission_${SHA}.zip"
 mkdir -p dist
