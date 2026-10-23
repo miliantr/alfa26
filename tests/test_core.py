@@ -115,6 +115,68 @@ def test_stateful_recipes_are_refitted_inside_folds():
     assert isinstance(fa["key__c"].dtype, pd.CategoricalDtype) and (fa["key__c"] == A["key__c"].iloc[:100].to_numpy()).all()
 
 
+def _panel(n_ent=300, noise=2.0, seen=0.8):
+    """Buildings observed in years 1-4 (train) and year 5 (test, mostly the same ones)."""
+    ent = pd.DataFrame({"area": rng.uniform(1e3, 1e5, n_ent).round(1), "built": rng.integers(1900, 2015, n_ent),
+                        "kind": rng.choice(list("abcdef"), n_ent), "effect": rng.normal(0, 30, n_ent)})
+    tr = pd.concat([ent.assign(year=yr, temp=rng.normal(size=n_ent)) for yr in (1, 2, 3, 4)], ignore_index=True)
+    te = ent.sample(frac=seen, random_state=0).assign(year=5)
+    te["temp"] = rng.normal(size=len(te))
+    tr["y"] = 80 + tr["effect"] + 3 * tr["temp"] + rng.normal(0, noise, len(tr))
+    return tr.drop(columns="effect"), te.drop(columns="effect")
+
+
+def test_entity_key_found_for_recurring_entities_only():
+    tr, te = _panel()
+    prof = profiler.profile(tr, te, ["y"], None, "regression", y=tr["y"].to_numpy(), time_hint="year",
+                            adversarial=False)
+    ent = prof.entity
+    assert ent and "area" in ent["cols"] and "year" not in ent["cols"] and "temp" not in ent["cols"]
+    assert ent["coverage"] >= 0.75 and ent["repeat"] > 0.9 and ent["purity"] > 0.7
+    # i.i.d. rows: no key recurs, so none is proposed
+    iid = pd.DataFrame({"a": rng.normal(size=600), "b": rng.normal(size=600), "c": rng.choice(list("xyz"), 600)})
+    iid["y"] = iid["a"] * 2 + rng.normal(size=600)
+    prof2 = profiler.profile(iid.iloc[:450], iid.iloc[450:].drop(columns="y"), ["y"], None, "regression",
+                             y=iid["y"].iloc[:450].to_numpy(), adversarial=False)
+    assert prof2.entity == {}
+
+
+def test_auto_smoothing_trusts_stable_entities_not_noisy_categories():
+    import agent_worker as worker
+
+    key = np.repeat(np.arange(200), 4).astype(str)
+    stable = np.repeat(rng.normal(0, 30, 200), 4) + rng.normal(0, 1, 800)
+    assert worker._auto_smooth(key, stable.reshape(-1, 1)) == 0.5
+    noisy = rng.normal(0, 30, 800)  # the key says nothing about the target
+    assert worker._auto_smooth(key, noisy.reshape(-1, 1)) >= 20.0
+
+
+def test_worker_entity_history_with_auto_smoothing(tmp_path):
+    import agent_worker as worker
+
+    tr, te = _panel()
+    y = tr.pop("y").to_numpy()
+    for x in (tr, te):
+        x["kind"] = pd.Categorical(x["kind"], categories=list("abcdef"))
+    folds = (tr["year"].to_numpy() - 1).astype(int)
+    pd.to_pickle({"Xtr": tr.reset_index(drop=True), "Xte": te.reset_index(drop=True), "y": y, "folds": folds,
+                  "eval_mask": None, "folds_rep": None,
+                  "meta": {"task_type": "regression", "n_classes": 0, "metric": "rmse",
+                           "y_range": [float(y.min()), float(y.max())]}}, tmp_path / "base.pkl")
+    base = {"base_path": str(tmp_path / "base.pkl"), "fs_cache_dir": str(tmp_path / "fs"), "metric": "rmse",
+            "seed": 1, "n_jobs": 2, "time_limit": 120}
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    plain = worker.run({**base, "out_dir": str(tmp_path / "a"),
+                        "model": {"family": "lgbm", "objective": "l2", "target_transform": "none"}})
+    ent = worker.run({**base, "out_dir": str(tmp_path / "b"),
+                      "feature_ops": [{"op": "make_key", "args": {"cols": ["area", "built", "kind"], "name": "entity_key"}}],
+                      "model": {"family": "lgbm", "objective": "l2", "target_transform": "none",
+                                "te_cols": ["entity_key"], "te_smooth": "auto"}})
+    assert plain["status"] == ent["status"] == "ok"
+    assert ent["score"] < 0.5 * plain["score"], (ent["score"], plain["score"])
+
+
 def test_worker_refits_stateful_recipes_in_every_fold(tmp_path, monkeypatch):
     import agent_worker as worker
 

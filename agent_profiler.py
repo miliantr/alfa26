@@ -49,6 +49,7 @@ class DataProfile:
     leakage: list = field(default_factory=list)
     duplicate_rows: float = 0.0
     unseen_categories: dict = field(default_factory=dict)
+    entity: dict = field(default_factory=dict)  # recurring-entity key (find_entity_key)
     seconds: float = 0.0
 
     @property
@@ -79,6 +80,7 @@ class DataProfile:
             "shift_top_features": self.adversarial.get("top_features", [])[:5],
             "duplicate_rows_frac": round(self.duplicate_rows, 3),
             "leakage_suspects": self.leakage,
+            "entity_key": self.entity or None,
         }
 
 
@@ -200,6 +202,10 @@ def profile(train: pd.DataFrame, test: pd.DataFrame, target_cols: list[str], id_
     prof.validation = choose_validation(prof, task_type, n)
     if y is not None:
         prof.leakage = _leak_suspects(train, prof, y, task_type)
+        try:
+            prof.entity = find_entity_key(train, test, prof, y, task_type)
+        except Exception as e:  # noqa: BLE001
+            L.warning("entity key search failed: %s", e)
     if adversarial and prof.features:
         try:
             prof.adversarial = adversarial_validation(train[prof.features], test[prof.features],
@@ -208,6 +214,76 @@ def profile(train: pd.DataFrame, test: pd.DataFrame, target_cols: list[str], id_
             L.warning("adversarial validation failed: %s", e)
     prof.seconds = round(time.time() - t0, 2)
     return prof
+
+
+def _key_codes(frame: pd.DataFrame, cols: list[str]) -> np.ndarray:
+    return frame[cols].astype(str).groupby(cols, sort=False, dropna=False).ngroup().to_numpy()
+
+
+def _entity_stats(k_tr: np.ndarray, k_te: np.ndarray, Y: np.ndarray, period, total: float) -> dict:
+    """coverage: test rows whose key occurs in train; repeat: train rows whose key recurs
+    (in two or more periods on a time split); purity: 1 - within-key spread / overall."""
+    keys = pd.Series(k_tr)
+    if period is not None:
+        n_per = pd.Series(period).groupby(k_tr).nunique()
+    else:
+        n_per = keys.value_counts()
+    rep = np.isin(k_tr, n_per.index[n_per >= 2].to_numpy())
+    out = {"coverage": float(np.isin(k_te, k_tr).mean()), "repeat": float(rep.mean()), "purity": 0.0}
+    if rep.sum() < 20 or total <= 0:
+        return out
+    sub = pd.DataFrame(Y[rep]).assign(_k=k_tr[rep])
+    cols = [c for c in sub.columns if c != "_k"]
+    dev = sub[cols] - sub.groupby("_k")[cols].transform("mean")
+    within = float((dev ** 2).to_numpy().sum() / max(1, len(sub) * len(cols)))
+    out["purity"] = float(max(0.0, 1.0 - np.sqrt(within / total)))
+    return out
+
+
+def find_entity_key(train: pd.DataFrame, test: pd.DataFrame, prof: DataProfile, y, task_type: str,
+                    max_cols: int = 5, max_rows: int = 200_000) -> dict:
+    """Columns that together identify a recurring entity (a building, a customer, a
+    device): the key recurs in train (across periods on a time split), most test rows
+    carry a key seen in train, and the target barely varies within a key. Its
+    out-of-fold target mean is then the entity's own history. Greedy forward search on
+    coverage x repeat x purity; {} when no key qualifies."""
+    if y is None or len(train) < 200 or len(test) == 0:
+        return {}
+    cands = [c for c in prof.num_features + prof.cat_features if c != prof.time_column]
+    if not cands:
+        return {}
+    idx = np.arange(len(train))
+    if len(idx) > max_rows:
+        idx = np.sort(np.random.default_rng(0).choice(idx, max_rows, replace=False))
+    yy = np.asarray(y)[idx]
+    if task_type == "regression":
+        Y = yy.astype(float).reshape(-1, 1)
+        Y = np.where(np.isfinite(Y), Y, np.nanmean(Y))
+    else:
+        Y = (yy.reshape(-1, 1) == np.unique(yy).reshape(1, -1)).astype(float)
+    total = float(np.mean(Y.var(axis=0)))
+    period = train[prof.time_column].to_numpy()[idx] if prof.time_column else None
+    both = pd.concat([train[cands].iloc[idx], test[cands]], ignore_index=True)
+    n_tr = len(idx)
+    key: list[str] = []
+    best = {"score": 0.0}
+    for _ in range(max_cols):
+        step = None
+        for c in cands:
+            if c in key:
+                continue
+            codes = _key_codes(both, key + [c])
+            st = _entity_stats(codes[:n_tr], codes[n_tr:], Y, period, total)
+            st["score"] = st["coverage"] * st["repeat"] * st["purity"]
+            if step is None or st["score"] > step[1]["score"]:
+                step = (c, st)
+        if step is None or step[1]["score"] <= best["score"] + 0.01:
+            break
+        key.append(step[0])
+        best = step[1]
+    if not key or best["purity"] < 0.5 or best["coverage"] < 0.3 or best["repeat"] < 0.3:
+        return {}
+    return {"cols": key, **{k: round(v, 3) for k, v in best.items()}}
 
 
 def _target_summary(train, target_cols, task_type, y) -> dict:

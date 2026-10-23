@@ -209,6 +209,7 @@ class ResearchLoop:
         self.history: list[dict] = []
         self.tried: set[str] = set()
         self.queue: list[dict] = self._deterministic_queue()
+        self.priority: list[dict] = self._priority_hypotheses()
         self.llm_queue: list[dict] = []
         self.champ = None
         self.since_propagation = 0
@@ -229,6 +230,18 @@ class ResearchLoop:
         return self.pipe.best()
 
     # ------------------------------------------------------------ planning
+    def _priority_hypotheses(self) -> list[dict]:
+        """Tried before anything else: a recurring entity's own target history (profiler's
+        find_entity_key). On task 1 a building key took the future-year holdout from 34.6
+        to 31.3, and CV agreed, unlike most features."""
+        ent = getattr(self.prof, "entity", None) or {}
+        if not ent.get("cols"):
+            return []
+        return [{"action": "feature_engineering", "recipe": "make_key", "source": "planner",
+                 "args": {"cols": list(ent["cols"]), "name": "entity_key", "te": True},
+                 "rationale": f"entity history: key recurs for {ent.get('repeat', 0):.0%} of train rows, "
+                              f"covers {ent.get('coverage', 0):.0%} of test, target purity {ent.get('purity', 0):.2f}"}]
+
     def _deterministic_queue(self) -> list[dict]:
         p, spec = self.prof, self.spec
         q: list[dict] = []
@@ -386,6 +399,8 @@ class ResearchLoop:
 
     def _next(self) -> dict | None:
         """Interleave LLM ideas with the deterministic plan; tuning fills idle time."""
+        if self.priority:
+            return self.priority.pop(0)
         if not self.llm_queue and self._llm_paced():
             self.llm_queue = self._ask_llm()
         use_llm = self.llm_queue and (len(self.history) % 3 != 2 or not self.queue)
@@ -419,7 +434,8 @@ class ResearchLoop:
             op = {"op": recipe, "args": args, "name": recipe}
             model = base_model
             if te:
-                model = {**base_model, "te_cols": list(base_model.get("te_cols") or [])}
+                # An entity's own history: low prior strength when the key is stable.
+                model = {**base_model, "te_cols": list(base_model.get("te_cols") or []), "te_smooth": "auto"}
                 key_name = args.get("name") or "key__" + "__".join(features._safe_name(c) for c in args.get("cols", []))[:60]
                 model["te_cols"].append(key_name)
             return {"model": model, "feature_ops": ops + [op], "drop_cols": drop}, ""
@@ -564,7 +580,14 @@ class ResearchLoop:
             est = self.pipe.estimate_seconds(fam) * 1.2
             if est > 0.25 * self.deadline.research_remaining():
                 continue
-            e = self.pipe.run(f"{fam}_on_base{len(self.pipe.base_ops)}", ref.model, feature_ops=self.pipe.base_ops,
+            model = copy.deepcopy(ref.model)
+            if self.champ is not None and self.champ.model.get("te_cols"):
+                # Accepted target encodings (e.g. an entity key) belong to the feature set.
+                model["te_cols"] = list(self.champ.model["te_cols"])
+                model.pop("te_smooth", None)
+                if "te_smooth" in self.champ.model:
+                    model["te_smooth"] = self.champ.model["te_smooth"]
+            e = self.pipe.run(f"{fam}_on_base{len(self.pipe.base_ops)}", model, feature_ops=self.pipe.base_ops,
                               drop_cols=self.champ.drop_cols if self.champ else [], source="propagate")
             if e.status == "ok":
                 self.pipe.refresh_submission("propagate")

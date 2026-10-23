@@ -5,6 +5,16 @@ import agent_profiler as profiler
 from agent_research_loop import ResearchLoop, Tuner, clamp_params
 
 
+def test_entity_history_is_tried_first():
+    from types import SimpleNamespace
+
+    ent = {"cols": ["floor_area", "year_built", "facility_type"], "coverage": 0.79, "repeat": 0.86, "purity": 0.73}
+    h = ResearchLoop._priority_hypotheses(SimpleNamespace(prof=SimpleNamespace(entity=ent)))
+    assert len(h) == 1 and h[0]["recipe"] == "make_key" and h[0]["args"]["te"] is True
+    assert h[0]["args"]["cols"] == ent["cols"]
+    assert ResearchLoop._priority_hypotheses(SimpleNamespace(prof=SimpleNamespace(entity={}))) == []
+
+
 def test_clamp_params_whitelist_and_ranges():
     p, dropped = clamp_params("lgbm", {"num_leaves": 100000, "learning_rate": -1, "rm_rf": True,
                                        "extra_trees": 1, "min_child_samples": "50"})

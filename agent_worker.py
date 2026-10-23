@@ -32,8 +32,29 @@ def _safe_columns(df_list):
     return [d.rename(columns=mapping) for d in df_list], mapping
 
 
+def _auto_smooth(key: np.ndarray, Y: np.ndarray) -> float:
+    """Empirical-Bayes prior strength: within-key variance over between-key variance. An
+    entity whose target barely changes (a building's energy use across years) keeps its
+    own mean; a noisy category is pulled towards the global mean."""
+    df = pd.DataFrame(Y).assign(_k=key)
+    n = df.groupby("_k").size()
+    rep = n.index[n >= 2]
+    if len(rep) < 10:
+        return 20.0
+    sub = df[df["_k"].isin(rep)]
+    cols = [c for c in sub.columns if c != "_k"]
+    g = sub.groupby("_k")[cols]
+    within = float(((sub[cols] - g.transform("mean")) ** 2).to_numpy().sum()
+                   / max(1, (len(sub) - len(rep)) * len(cols)))
+    between = float(g.mean().var(ddof=1).mean()) - within / float(n[rep].mean())
+    if not np.isfinite(between) or between <= 0:
+        return 50.0
+    return float(np.clip(within / between, 0.5, 50.0))
+
+
 def _target_encode(Xtr, ytr, others, cols, task, k, seed, n_inner=5, smooth=20.0):
-    """Out-of-fold mean-target encoding fitted on the training fold only."""
+    """Out-of-fold mean-target encoding fitted on the training fold only. ``smooth`` is the
+    prior strength in rows, or "auto" for the empirical-Bayes value per column."""
     from sklearn.model_selection import KFold
 
     Xtr = Xtr.copy()
@@ -43,10 +64,13 @@ def _target_encode(Xtr, ytr, others, cols, task, k, seed, n_inner=5, smooth=20.0
     else:
         Y = ytr.reshape(-1, 1).astype(float)
     prior = Y.mean(0)
+    auto = smooth == "auto"
     for c in cols:
         if c not in Xtr.columns:
             continue
         key = Xtr[c].astype(str).to_numpy()
+        if auto:
+            smooth = _auto_smooth(key, Y)
         names = [f"{c}__te{j}" if Y.shape[1] > 1 else f"{c}__te" for j in range(Y.shape[1])]
         enc_tr = np.zeros((len(Xtr), Y.shape[1]))
         for tr, va in KFold(n_inner, shuffle=True, random_state=seed).split(key):
@@ -147,7 +171,8 @@ def run(job: dict) -> dict:
         else:
             A, B, C = Xtr.iloc[tr], Xtr.iloc[va], Xte
         if te_cols:
-            A, (B, C) = _target_encode(A, y_fit[tr], [B, C], te_cols, task, k, seed)
+            A, (B, C) = _target_encode(A, y_fit[tr], [B, C], te_cols, task, k, seed,
+                                       smooth=model.get("te_smooth", 20.0))
         t0 = time.time()
         pva, pte, info = models.fit_predict(family, params, task, A, y_fit[tr], B, y_fit[va], C,
                                             n_classes=k, n_jobs=n_jobs, seed=seed + 100 * r + f,
