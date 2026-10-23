@@ -19,6 +19,7 @@ import argparse
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -53,7 +54,9 @@ def main() -> int:
     results["1_imports_within_requirements"] = r.returncode == 0
     results["2a_no_network_libs_outside_llm_client"] = "passed" in r.stdout and r.returncode == 0
 
-    sh = subprocess.run(["bash", str(REPO / "make_submission.sh")], cwd=str(REPO), capture_output=True, text=True)
+    # On Windows a bare "bash" resolves to System32's WSL launcher before PATH; use PATH's.
+    bash = shutil.which("bash") or "bash"
+    sh = subprocess.run([bash, str(REPO / "make_submission.sh")], cwd=str(REPO), capture_output=True, text=True)
     zips = sorted((REPO / "dist").glob("submission_*.zip"), key=lambda p: p.stat().st_mtime)
     if sh.returncode == 0 and zips:
         names = zipfile.ZipFile(zips[-1]).namelist()
@@ -63,7 +66,7 @@ def main() -> int:
                             "forbidden": [n for n in names if n.endswith(("pyproject.toml", "uv.lock", ".csv"))]}
     else:
         results["3_zip_flat_root"] = False
-        results["3_zip"] = sh.stderr[-500:]
+        results["3_zip"] = f"exit {sh.returncode}: " + (sh.stderr or sh.stdout)[-500:]
 
     down = _run_local(["--task", args.task, "--time-budget", "240", "--llm", "real"],
                       {"OPENAI_API_KEY": "sk-invalid", "OPENAI_MODEL": "qwen-test",
