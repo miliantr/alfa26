@@ -234,3 +234,45 @@ would each have cost points on the platform; v0.1 and v0.2 must not be submitted
   the same features is weaker: in run 2 a log1p LightGBM was "kept" for beating a failed
   tuning trial (49.14) although it was worse than the plain LightGBM on 3 of 4 folds. That
   only affected the journal the Researcher sees: the blend picks members by OOF anyway.
+
+## v0.3 re-validation (2026-10-23)
+
+- **Generalization suite on 9a4378b** (`runs/suite_v03`, mock LLM, 240 s): 14/14 valid
+  within budget; every task within ±0.005 of the v0.1 run except digits (macro-F1
+  0.9735 -> 0.9677, now just below RF 0.9707). Cause: repeated CV for small data
+  (3 x 5 folds under 5 000 rows) was added after the v0.1 suite run, so LightGBM took
+  112 s on 1 348 rows and only the quick model and LightGBM fit into 240 s (v0.1 also
+  ran ExtraTrees, the best family there). Not an issue at the platform's 3 hours.
+- **60-minute rehearsals with the live Qwen proxy** (`runs/v03_live_*`, 6 threads each,
+  in parallel): both exit 0 (3 424 s / 3 379 s), peak 0.85 / 0.89 GB, 0 failed
+  experiments, 0 LLM failures. Task 1: 7 calls, 24.5k tokens; task 2: 4 calls, 11.7k.
+  Holdout: task 1 test-like RMSE 36.10 (zoo 34.56, norm. 10.2); task 2 macro-F1 0.6364
+  (zoo 0.6328, norm. 15.0). Quick and zoo phases are identical to every earlier run.
+- **Research and the next period on task 1.** Qwen proposed group statistics again, this
+  time over floor_area, energy_star_rating, year_built and heating/cooling degree days;
+  with honest per-fold fitting they won 4/4 leave-one-period-out folds (CV 44.16 ->
+  42.50) and made the holdout period 34.52 -> 39.97. Scoring all 35 experiments of the
+  run on that period: the zoo's plain XGBoost is the best (34.52); nearly every change
+  that won on CV lost on it (drops, tuning, other recipes alike). Offline, same xgb,
+  per-fold fitting, cats = facility_type + building_class:
+
+  | nums | LOPO CV | folds better | holdout |
+  | --- | --- | --- | --- |
+  | none | 45.45 | - | 34.61 |
+  | floor_area | 44.38 | 4/4 | 35.87 |
+  | energy_star_rating, year_built | 43.99 | 4/4 | 35.92 |
+  | heating/cooling degree days | 46.06 | 0/4 (rejected) | 37.17 |
+  | all five | 43.29 | 4/4 | 39.52 |
+
+  Forward chaining (train on earlier periods only; folds = periods 2, 3, 4) is more
+  conservative but not a fix: base [45.99, 56.66, 42.50]; all five [45.62, 57.81, 40.56]
+  (2/3, mean gain 0.39 < 0.5 SE 0.45: rejected); energy_star + year_built
+  [45.50, 56.84, 40.67] (2/3, mean gain 0.71: accepted, yet holdout 35.92). The most
+  recent training period (4) improved in every variant, so no check built from the
+  training years alone flags these features; the holdout period behaves differently.
+- **Decision: no further guard for now.** Over the four task-1 runs the final holdout was
+  33.25 (mock LLM), 36.92, 34.78 and 36.10 (live) against a stable zoo at 34.56; task 2
+  and the suite gain or hold. Adding forward-chaining acceptance or hedging the final
+  blend toward the zoo on time splits are the candidate mitigations; both also cost gains
+  where research helps, and the evidence is one future period of one task. Recorded as a
+  known risk (README, slide 15).

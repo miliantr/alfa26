@@ -134,10 +134,38 @@ because the real test has no such rows (see NOTES.md, "eval mask").
 
 ### Public tasks: dress rehearsals
 
-Complete end-to-end rehearsals of the submission candidate (commit `cd77a4e`): local,
-6 CPU threads per task (both tasks in parallel on a 12-thread box, i.e. less compute than
-the platform's 8 CPUs), mock LLM, **60-minute budget**. Every phase ran and the process
-exited cleanly inside the budget.
+**v0.3 with the live Qwen proxy** (agent code `9a4378b`): local, 6 CPU threads per task
+(both tasks in parallel on a 12-thread box), **60-minute budget**, the organizers' LLM.
+Both runs exited 0 inside the budget (3 424 s / 3 379 s), peak RSS 0.85 / 0.89 GB,
+0 failed experiments, 0 LLM failures.
+
+| Stage | Task 1 RMSE, OOF | Task 1 RMSE, holdout (test-like) | Norm. | Task 2 Macro F1, OOF | Task 2 Macro F1, holdout | Norm. |
+| --- | --- | --- | --- | --- | --- | --- |
+| a) fallback (quick model) | 45.93 | 36.43 | 9.4 | 0.6335 | 0.6317 | 13.9 |
+| b) core pipeline (model zoo) | 43.62 | **34.56** | **14.0** | 0.6426 | 0.6328 | 14.1 |
+| c) full agent (research + final) | 40.49 | 36.10 | 10.2 | 0.6462 | **0.6364** | **15.0** |
+| Baselines on the same holdout | — | linear 44.69, RF 40.20 | | — | linear 0.418, RF 0.572 | |
+
+LLM use: task 1 7 calls (21.3k + 3.2k tokens), task 2 4 calls (10.2k + 1.5k tokens);
+35 / 18 experiments; 3 / 0 hypotheses kept (task 1: Qwen's group statistics by facility
+type and building class, the planner's frequency encoding, Qwen's drop of weather-direction
+columns).
+
+**Known risk on time splits (task 1).** Research improved leave-one-period-out CV on every
+fold, yet the next period got worse: 34.56 after the zoo, 36.10 at the end. Scoring each of
+the 35 experiments on that period, the plain XGBoost from the zoo is the best (34.52), and
+nearly every change that won on CV made that period worse; the kept group statistics alone
+went 34.52 → 39.97 although they won 4 of 4 folds with honest per-fold fitting. A strictly
+forward validation (train on earlier periods only) would have rejected the worst variant
+but not all of them (NOTES.md). The three live task-1 runs ended at 36.92, 34.78 and 36.10;
+the earlier mock-LLM rehearsal below, with different accepted changes, improved the same
+period to 33.25. On time-split tasks the research phase is therefore a gamble on the next
+period, while the zoo result it starts from is stable across runs. Task 2 (random split)
+gains from research.
+
+The earlier rehearsal of the pipeline before the fold refits (commit `cd77a4e`): local,
+6 CPU threads per task, mock LLM, 60-minute budget. Every phase ran and the process exited
+cleanly inside the budget.
 
 | Stage | Task 1 RMSE, OOF | Task 1 RMSE, holdout (test-like) | Norm. | Task 2 Macro F1, OOF | Task 2 Macro F1, holdout | Norm. |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -168,28 +196,32 @@ estimate for the platform.
 
 ### Generalization suite: 14 synthetic unseen tasks (240 s each, mock LLM)
 
-All 14 finished within budget with a valid submission (`python -m harness.suite`).
+All 14 finished within budget with a valid submission (`python -m harness.suite`; run on
+the v0.3 agent code, `9a4378b`, results in `runs/suite_v03`).
 
 | Task | Metric | Agent | Linear | Random forest | Normalized |
 | --- | --- | --- | --- | --- | --- |
-| 400 features, 3 000 rows | ROC-AUC | 0.9561 | 0.8296 | 0.9079 | 52.3 |
-| 20% injected NaNs, renamed columns, time split | RMSLE | 0.5474 | 10.6055 | 0.7653 | 28.5 |
-| Datetime + text, time split | MAE | 1.9522 | 2.6199 | 2.6539 | 25.5 |
-| Ordinal grades | QWK | 0.4129 | 0.1633 | 0.2421 | 22.5 |
-| Probabilities for 5 classes | LogLoss | 0.3481 | 0.4465 | 0.5950 | 22.0 |
+| 400 features, 3 000 rows | ROC-AUC | 0.9559 | 0.8296 | 0.9079 | 52.1 |
+| 20% injected NaNs, renamed columns, time split | RMSLE | 0.5508 | 10.6055 | 0.7653 | 28.0 |
+| Datetime + text, time split | MAE | 1.9503 | 2.6199 | 2.6539 | 25.6 |
+| Ordinal grades | QWK | 0.4143 | 0.1633 | 0.2421 | 22.7 |
+| Probabilities for 5 classes | LogLoss | 0.3506 | 0.4465 | 0.5950 | 21.5 |
 | Attack vs normal | LogLoss | 0.0997 | 0.1449 | 0.1108 | 9.9 |
-| Handwritten digits | Macro F1 | 0.9735 | 0.9605 | 0.9707 | 9.4 |
-| Anonymised features, integer labels | Weighted F1 | 0.8154 | 0.7508 | 0.8001 | 7.6 |
+| Anonymised features, integer labels | Weighted F1 | 0.8153 | 0.7508 | 0.8001 | 7.6 |
 | Missing values in the target | MAE | 21.1441 | diverged | 21.6414 | 2.3 |
-| Two targets in one submission | RMSE | 43.19 / 25.86 | — | — | valid |
+| Two targets in one submission | RMSE | 43.08 / 25.85 | — | — | valid |
 | Building class (trivially separable) | ROC-AUC | 1.0000 | 0.9999 | 1.0000 | — |
-| 442 rows (diabetes) | R² | 0.4116 | 0.4543 | 0.3684 | 0 |
+| Handwritten digits, 1 800 rows | Macro F1 | 0.9677 | 0.9605 | 0.9707 | 0 |
+| 442 rows (diabetes) | R² | 0.4243 | 0.4543 | 0.3684 | 0 |
 | 569 rows (breast cancer) | F1 | 0.9531 | 0.9612 | 0.9206 | 0 |
 | 178 rows (wine) | Accuracy | 1.0000 | 1.0000 | 0.9787 | 0 (tie) |
 
-Tiny datasets are the known weak spot: on a few hundred rows the agent ties or trails a
-plain linear model. The tiny-task rows are from the re-run after cross-fitted decision
-rules and repeated CV were added.
+Small datasets are the known weak spot: on a few hundred rows the agent ties or trails a
+plain linear model. Against the v0.1 run every task is within ±0.005 except digits
+(0.9735 then): repeated CV for small data (3 × 5 folds under 5 000 rows), added after that
+run, makes each model three times as slow, so in the suite's 240 s only the quick model
+and LightGBM finish (v0.1 also had ExtraTrees, the best family there). With the
+platform's 3 hours every family runs.
 
 ### Submission checklist (commit `9a4378b`, `python -m harness.checklist`)
 
