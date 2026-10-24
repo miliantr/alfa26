@@ -276,3 +276,35 @@ would each have cost points on the platform; v0.1 and v0.2 must not be submitted
   blend toward the zoo on time splits are the candidate mitigations; both also cost gains
   where research helps, and the evidence is one future period of one task. Recorded as a
   known risk (README, slide 15).
+
+## First platform score and v0.4: entity history (2026-10-24)
+
+- **Platform:** the v0.3 ZIP (tag `submit-2026-10-24-1`) scored **18.6005**, rank 81 on
+  the public leaderboard. The final ranking is decided on the two hidden tasks, so only
+  generic changes are worth making.
+- **Finding:** task 1's rows are building-years. With the key state + building class +
+  facility type + floor area + year built, 79% of the test rows (year 6) belong to a
+  building already in train, 66% of train buildings recur, and the target's
+  within-building spread is tiny (median std 6.9 vs 58.7 overall). A building's own past
+  energy use is the strongest predictor available, and the agent already had the tools
+  (`make_key` + out-of-fold target encoding) but smoothed the encoding with a fixed
+  prior of 20 rows, which for a building with 3-4 past years keeps ~85% of the global mean.
+- **Offline** (same holdout, LOPO folds, xgb defaults; CV / future-year holdout):
+  no key 45.45 / 34.61; key + TE smoothing 20: 38.80 / 32.31; 5: 38.34 / 31.68;
+  1: 37.10 / 31.32. Unlike the group statistics above, CV and the next period agree.
+- **v0.4 makes it generic:**
+  - `profiler.find_entity_key`: greedy forward search over the features (minus the time
+    column) for a key maximising coverage (test rows with a key seen in train) x repeat
+    (train rows whose key recurs, across periods on a time split) x purity (1 - within-key
+    target spread / overall). Qualifies at purity >= 0.5, coverage >= 0.3, repeat >= 0.3.
+    Task 1: floor_area + year_built + facility_type (coverage 0.79, repeat 0.86, purity
+    0.73) in ~12 s; task 2: none (network flows have no recurring entities).
+  - Worker: `te_smooth="auto"` = empirical-Bayes prior strength (within-key variance over
+    between-key variance, clamped to 0.5..50); used only for entity keys.
+  - Research loop: the entity hypothesis runs before everything else and is judged by the
+    usual paired rule; accepted target encodings now travel with propagated families.
+- **60-minute rehearsal with the live Qwen proxy, v0.4 vs v0.3** (same holdouts):
+  task 1 test-like RMSE 36.10 -> **32.17** (zoo 34.56; the entity key alone: CV 44.16 ->
+  35.48, holdout 34.52 -> 30.80, 4/4 folds; research 31.55, then the final re-blend lost a
+  little); task 2 macro-F1 0.6364 -> **0.6407** (no entity found; run-to-run variation).
+  Task 1 used the full 30 LLM calls (110k tokens), task 2 7 calls; 0 failures.

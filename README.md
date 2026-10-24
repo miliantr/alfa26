@@ -134,6 +134,23 @@ because the real test has no such rows (see NOTES.md, "eval mask").
 
 ### Public tasks: dress rehearsals
 
+**v0.4 with the live Qwen proxy** (agent code `4444449`): same setup as the v0.3 run below
+(local, 6 threads per task, both tasks in parallel, 60-minute budget, same holdouts). Both
+runs exited 0 (3 288 s / 3 327 s), peak RSS 1.01 / 0.89 GB, 0 LLM failures.
+
+| Stage | Task 1 RMSE, holdout (test-like) | Norm. | Task 2 Macro F1, holdout | Norm. |
+| --- | --- | --- | --- | --- |
+| a) fallback (quick model) | 36.43 | 9.4 | 0.6317 | 13.9 |
+| b) core pipeline (model zoo) | 34.56 | 14.0 | 0.6328 | 14.1 |
+| c) full agent (research + final) | **32.17** | **20.0** | **0.6407** | **16.0** |
+
+What changed: the profiler now finds recurring entities (task 1: floor area + year built +
+facility type identifies a building; 79% of test rows belong to a building seen in train),
+and the research loop first tries each entity's own out-of-fold target history with an
+empirical-Bayes prior. That single hypothesis took task 1 from CV 44.16 / holdout 34.52 to
+35.48 / 30.80, winning 4 of 4 folds, and unlike earlier feature gains it held on the next
+period (NOTES.md). Task 2 has no recurring entities and behaves as before.
+
 **v0.3 with the live Qwen proxy** (agent code `9a4378b`): local, 6 CPU threads per task
 (both tasks in parallel on a 12-thread box), **60-minute budget**, the organizers' LLM.
 Both runs exited 0 inside the budget (3 424 s / 3 379 s), peak RSS 0.85 / 0.89 GB,
@@ -197,7 +214,10 @@ estimate for the platform.
 ### Generalization suite: 14 synthetic unseen tasks (240 s each, mock LLM)
 
 All 14 finished within budget with a valid submission (`python -m harness.suite`; run on
-the v0.3 agent code, `9a4378b`, results in `runs/suite_v03`).
+the v0.3 agent code, `9a4378b`, results in `runs/suite_v03`). The v0.4 run
+(`runs/selftest_v04/suite`) is also 14/14 within budget with the same scores except
+weighted F1 0.8153 -> 0.8182 (norm. 7.6 -> 9.1) and RMSLE 0.5508 -> 0.5501; none of the
+synthetic tasks has a recurring entity, so the new hypothesis never fires there.
 
 | Task | Metric | Agent | Linear | Random forest | Normalized |
 | --- | --- | --- | --- | --- | --- |
@@ -223,22 +243,25 @@ run, makes each model three times as slow, so in the suite's 240 s only the quic
 and LightGBM finish (v0.1 also had ExtraTrees, the best family there). With the
 platform's 3 hours every family runs.
 
-### Submission checklist (commit `9a4378b`, `python -m harness.checklist`)
+### Submission checklist (commit `4444449`, v0.4, `python -m harness.checklist`)
 
 | Check | Result |
 | --- | --- |
 | Imports ⊆ intersection of both requirements files | pass (`tests/test_imports.py`) |
 | No network libraries outside `agent_llm_client.py` | pass |
-| Flat ZIP: `solution.py`, `agent_*.py`, `requirements.txt` at the root, no subfolders | pass (23 files, 79 KB) |
-| ZIP unzipped and run in the platform layout (files copied into the task dir, `python3 solution.py task.md`) in the offline Docker image | pass (exit 0, 238 s, peak 0.71 GB, valid file) |
+| Flat ZIP: `solution.py`, `agent_*.py`, `requirements.txt` at the root, no subfolders | pass (23 files, 81 KB) |
+| ZIP unzipped and run in the platform layout (files copied into the task dir, `python3 solution.py task.md`) in the offline Docker image | pass (exit 0, 231 s, peak 0.70 GB, valid file) |
 | Valid submission with the LLM unreachable (connection refused) | pass (146 s) |
 | Valid submission with an LLM endpoint that hangs | pass (client gives up after 2 timeouts; quick model at 74 s) |
-| Live runs against the organizers' Qwen proxy | pass (3 × 15 min on task 1, 1 × 15 min on task 2; exit 0, valid files; NOTES.md) |
+| Live runs against the organizers' Qwen proxy | pass (60-min rehearsals of both tasks, 0 LLM failures; earlier 15-min runs in NOTES.md) |
 | Valid submission after hard kills at 459 s and 636 s | pass |
-| Offline Docker run on the real task-2 data (`--network none`, 8 CPUs) | pass (211 s, peak RSS 0.85 GB) |
-| Peak RAM < 28 GB | pass (1.13 GB max in the rehearsals) |
-| Finishes or saves within the budget | pass (57 of 60 min end to end; 3-hour runs interrupted by the host left valid files) |
-| Unit tests | 120 passed |
+| Offline Docker run on the real task-2 data (`--network none`, 8 CPUs) | pass (204 s, peak RSS 0.72 GB) |
+| Peak RAM < 28 GB | pass (1.01 GB max in the v0.4 rehearsals) |
+| Finishes or saves within the budget | pass (55 of 60 min end to end; 3-hour runs interrupted by the host left valid files) |
+| Unit tests | 124 passed |
+
+The two Docker items were re-run after Docker Desktop, stopped overnight, was restarted;
+the first attempt could not reach the daemon.
 
 The checklist's ZIP item used to accept any ZIP already in `dist/`; it now requires the
 build to succeed (on Windows it also has to call Git's bash, not the WSL launcher).
